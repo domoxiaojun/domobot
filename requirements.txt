@@ -1,0 +1,24 @@
+# Core Telegram Bot Framework (with all optional dependencies)
+python-telegram-bot[all]==21.0
+
+# Environment Configuration
+python-dotenv==1.0.0
+
+# Event Loop Management
+nest-asyncio==1.6.0
+
+# HTTP Requests
+httpx==0.27.0
+
+# Web Scraping
+beautifulsoup4==4.12.2
+lxml==5.2.2
+
+# Google Play Scraper
+google-play-scraper==1.2.7
+
+# Task Scheduling
+schedule==1.2.2
+
+# Data Classes (Python 3.7+ compatibility)
+dataclasses==0.6; python_version<"3.7"
