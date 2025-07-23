@@ -1,5 +1,5 @@
 # Core Telegram Bot Framework (with all optional dependencies)
-python-telegram-bot[all]==21.0
+python-telegram-bot[all]==22.2
 
 # Environment Configuration
 python-dotenv==1.0.0
@@ -22,3 +22,18 @@ schedule==1.2.2
 
 # Data Classes (Python 3.7+ compatibility)
 dataclasses==0.6; python_version<"3.7"
+
+# Redis (with async support and performance optimizations)
+redis[hiredis]==5.0.1
+
+# MySQL Async Driver
+aiomysql==0.2.0
+
+# SQLAlchemy with async support
+sqlalchemy[asyncio]==2.0.23
+
+# Internationalization and Number Formatting
+Babel>=2.14.0
+
+# Async File Operations
+aiofiles==23.2.1

@@ -1,30 +1,29 @@
 # type: ignore
 import logging
+
 from telegram import Update
 from telegram.ext import ContextTypes
 
-# 导入权限相关模块
-from utils.permissions import get_user_permission, Permission
 from utils.command_factory import command_factory
-from utils.compatibility_adapters import AdminManager
 from utils.formatter import foldable_text_with_markdown_v2
-from utils.message_manager import schedule_message_deletion
-from utils.config_manager import get_config
+from utils.message_manager import delete_user_command, send_help
+
+# 导入权限相关模块
+from utils.permissions import Permission, get_user_permission
+
 
 logger = logging.getLogger(__name__)
 
-# Create manager instance
-admin_manager = AdminManager()
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """显示机器人帮助信息"""
-    
+
     # 添加 null 检查
     if not update.message:
         return
-    
+
     user_permission = await get_user_permission(update, context)
-    
+
     help_text = """🤖 *多功能价格查询机器人*
 
 ✨ *主要功能:*
@@ -80,10 +79,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 - `/add <用户ID>`: (或回复消息) 添加用户到白名单。
 - `/addgroup`: (在群组中) 添加当前群组到白名单。
 
-🔍 *系统监控*
-- `/tasks`: 查看定时任务状态和下次运行时间。
-- `/scripts`: 查看自定义脚本加载状态。
-- `/logs`: 日志管理 (状态查看/归档/清理/维护)。
 
 🧹 *缓存管理*
 - `/rate_cleancache`: 清理汇率缓存。
@@ -97,7 +92,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 💡 *管理技巧:*
 - 管理面板支持批量操作和实时刷新。
-- 日志命令支持: `/logs archive`, `/logs cleanup`, `/logs maintenance`。
 - 所有缓存清理操作都会显示清理结果。"""
 
     super_admin_help_text = """
@@ -121,7 +115,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if user_permission.value >= Permission.ADMIN.value:
         help_text += admin_help_text
-    
+
     if user_permission.value >= Permission.SUPER_ADMIN.value:
         help_text += super_admin_help_text
 
@@ -130,38 +124,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 📞 *联系我们:*
 如需申请使用权限或遇到问题，请联系机器人管理员。"""
 
-    config = get_config()
-    sent_message = await context.bot.send_message(
-        chat_id=update.message.chat_id,
-        text=foldable_text_with_markdown_v2(help_text),
-        parse_mode='MarkdownV2',
-    )
-    schedule_message_deletion(
-        chat_id=sent_message.chat_id,
-        message_id=sent_message.message_id,
-        delay=config.auto_delete_delay,
-        user_id=update.effective_user.id,
-    )
-    if config.delete_user_commands:
-        schedule_message_deletion(
-            chat_id=update.message.chat_id,
-            message_id=update.message.message_id,
-            delay=config.user_command_delete_delay,
-            task_type="user_command",
-            user_id=update.effective_user.id,
-        )
+    await send_help(context, update.message.chat_id, foldable_text_with_markdown_v2(help_text), parse_mode="MarkdownV2")
+    await delete_user_command(context, update.message.chat_id, update.message.message_id)
+
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """处理/start命令"""
     # 添加 null 检查
     if not update.message or not update.effective_user:
         return
-        
+
     user = update.effective_user
-    
+
     welcome_text = f"""👋 *欢迎使用多功能价格查询机器人!*
 
-你好 {user.first_name}! 
+你好 {user.first_name}!
 
 🎯 *这个机器人可以帮你:*
 - 💱 查询实时汇率并进行货币转换
@@ -185,28 +162,20 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 ✅ 支持中文国家名称输入
 
 开始探索吧! 🎉"""
-    
-    config = get_config()
-    sent_message = await context.bot.send_message(
-        chat_id=update.message.chat_id,
-        text=foldable_text_with_markdown_v2(welcome_text),
-        parse_mode='MarkdownV2',
-    )
-    schedule_message_deletion(
-        chat_id=sent_message.chat_id,
-        message_id=sent_message.message_id,
-        delay=config.auto_delete_delay,
-        user_id=update.effective_user.id,
-    )
-    if config.delete_user_commands:
-        schedule_message_deletion(
-            chat_id=update.message.chat_id,
-            message_id=update.message.message_id,
-            delay=config.user_command_delete_delay,
-            task_type="user_command",
-            user_id=update.effective_user.id,
-        )
+
+    await send_help(context, update.message.chat_id, foldable_text_with_markdown_v2(welcome_text), parse_mode="MarkdownV2")
+    await delete_user_command(context, update.message.chat_id, update.message.message_id)
+
 
 # Register commands
-command_factory.register_command("start", start_command, permission=Permission.USER, description="开始使用机器人", use_retry=False, use_rate_limit=False)
-command_factory.register_command("help", help_command, permission=Permission.USER, description="显示帮助信息", use_retry=False, use_rate_limit=False)
+command_factory.register_command(
+    "start",
+    start_command,
+    permission=Permission.USER,
+    description="开始使用机器人",
+    use_retry=False,
+    use_rate_limit=False,
+)
+command_factory.register_command(
+    "help", help_command, permission=Permission.USER, description="显示帮助信息", use_retry=False, use_rate_limit=False
+)

@@ -1,30 +1,41 @@
-# --- 基础镜像 ---
-# 选择一个官方的、轻量的 Python 镜像作为基础。
-# python:3.9-slim 是一个不错的选择，因为它体积小，安全性高。
-FROM python:3.11.2
+# --- STAGE 1: Builder ---
+# 使用一个完整的、非 slim 的 Python 3.12 镜像作为"构建器"
+FROM python:3.12 as builder
 
-# --- 设置工作目录 ---
-# 在容器内创建一个 /app 目录，并将它设置为后续命令的执行目录。
-# 这样做可以保持容器文件系统的整洁。
+# 设置工作目录
 WORKDIR /app
 
-# --- 安装依赖 ---
-# 首先只复制 requirements.txt 文件，并安装依赖。
-# Docker 会缓存这一层，如果 requirements.txt 没有变化，下次构建时会直接使用缓存，加快构建速度。
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# [可选] 如果遇到编译错误，可以取消注释下一行来安装常见的构建依赖
+# RUN apt-get update && apt-get install -y build-essential libpq-dev
 
-# --- 复制项目文件 ---
-# 将项目中的所有文件复制到容器的 /app 目录中。
+# 复制 requirements.txt 并构建所有依赖的 wheel 文件
+COPY requirements.txt .
+RUN pip wheel --no-cache-dir --wheel-dir /app/wheels -r requirements.txt
+
+
+# --- STAGE 2: Final Image ---
+# 使用一个非常轻量的 slim Python 3.12 镜像作为最终的生产镜像
+FROM python:3.12-slim
+
+# 清理 apt 缓存
+RUN apt-get update && rm -rf /var/lib/apt/lists/*
+
+# 设置工作目录
+WORKDIR /app
+
+# 从“构建器”阶段复制已安装的依赖
+COPY --from=builder /app/wheels /app/wheels
+COPY requirements.txt .
+
+# 使用复制过来的 wheels 安装依赖，然后清理掉 wheel 文件
+RUN pip install --no-cache-dir --no-index --find-links=/app/wheels -r requirements.txt \
+    && rm -rf /app/wheels
+
+# 复制应用代码
 COPY . .
 
-# --- 暴露端口 ---
-# 声明容器将要监听的端口。这主要是一个文档性质的声明，
-# 真正的端口映射是在 docker run 或 docker-compose.yml 中完成的。
+# 暴露端口
 EXPOSE 8443
 
-# --- 启动命令 ---
-# 定义容器启动时要执行的命令。
-# 这里我们使用 python -u main.py，-u 参数可以确保 Python 的输出（比如 print 语句）
-# 不会被缓冲，直接显示在 Docker 日志中，方便调试。
+# 设置启动命令
 CMD ["python", "-u", "main.py"]

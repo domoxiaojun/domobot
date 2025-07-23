@@ -1,4 +1,33 @@
 services:
+  # MySQL 服务
+  mysql:
+    image: mysql:8.0
+    container_name: appbot-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - appbot-network
+    ports:
+      - "3306:3306"
+
+  # Redis 服务
+  redis:
+    image: redis:7-alpine
+    container_name: appbot-redis
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - appbot-network
+  
   # 服务名称，可以自定义，这里我们叫它 appbot。
   appbot:
     image: domomido/appbot:latest
@@ -16,6 +45,9 @@ services:
       - .env
     environment:
       - TZ=Asia/Shanghai
+      - REDIS_HOST=redis  # 使用服务名作为主机名
+      - DB_HOST=mysql     # 使用服务名作为主机名
+      
     # --- 端口映射 ---
     # 将主机的 8443 端口映射到容器的 8443 端口。
     # 格式是 "主机端口:容器端口"。
@@ -28,3 +60,22 @@ services:
     # 无需重新构建镜像，极大地提高了开发效率。
     volumes:
       - .:/app
+    
+    # --- 网络配置 ---
+    networks:
+      - appbot-network
+    
+    # --- 依赖配置 ---
+    depends_on:
+      - mysql
+      - redis
+
+# 定义网络
+networks:
+  appbot-network:
+    driver: bridge
+
+# 定义卷
+volumes:
+  mysql_data:
+  redis_data:
