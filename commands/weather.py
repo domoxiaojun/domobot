@@ -11,6 +11,7 @@ from telegram.helpers import escape_markdown
 from utils.command_factory import command_factory
 from utils.permissions import Permission
 from utils.config_manager import get_config
+from utils.formatter import foldable_text_v2, foldable_text_with_markdown_v2
 from utils.message_manager import send_message_with_auto_delete, delete_user_command
 
 # 全局变量
@@ -143,42 +144,42 @@ def format_daily_weather(daily_data: list[dict]) -> str:
         try:
             # --- 安全地获取并转义所有需要的数据 ---
             date_obj = datetime.datetime.strptime(day.get("fxDate", ""), "%Y-%m-%d")
-            date_str = escape_markdown(date_obj.strftime("%m-%d"), version=2)
+            date_str = date_obj.strftime("%m-%d")
             
-            moon_phase = escape_markdown(day.get('moonPhase', ''), version=2)
-            temp_min = escape_markdown(day.get('tempMin', 'N/A'), version=2)
-            temp_max = escape_markdown(day.get('tempMax', 'N/A'), version=2)
+            moon_phase = day.get('moonPhase', '')
+            temp_min = day.get('tempMin', 'N/A')
+            temp_max = day.get('tempMax', 'N/A')
             
             day_icon = WEATHER_ICONS.get(day.get("iconDay"), "❓")
-            text_day = escape_markdown(day.get('textDay', 'N/A'), version=2)
-            wind_dir_day = escape_markdown(day.get('windDirDay', 'N/A'), version=2)
-            wind_scale_day = escape_markdown(day.get('windScaleDay', 'N/A'), version=2)
+            text_day = day.get('textDay', 'N/A')
+            wind_dir_day = day.get('windDirDay', 'N/A')
+            wind_scale_day = day.get('windScaleDay', 'N/A')
             
             night_icon = WEATHER_ICONS.get(day.get("iconNight"), "❓")
-            text_night = escape_markdown(day.get('textNight', 'N/A'), version=2)
-            wind_dir_night = escape_markdown(day.get('windDirNight', 'N/A'), version=2)
-            wind_scale_night = escape_markdown(day.get('windScaleNight', 'N/A'), version=2)
+            text_night = day.get('textNight', 'N/A')
+            wind_dir_night = day.get('windDirNight', 'N/A')
+            wind_scale_night = day.get('windScaleNight', 'N/A')
             
-            humidity = escape_markdown(day.get('humidity', 'N/A'), version=2)
-            precip = escape_markdown(day.get('precip', 'N/A'), version=2)
-            sunrise = escape_markdown(day.get('sunrise', 'N/A'), version=2)
-            sunset = escape_markdown(day.get('sunset', 'N/A'), version=2)
-            vis = escape_markdown(day.get('vis', 'N/A'), version=2)
-            uv_index = escape_markdown(day.get('uvIndex', 'N/A'), version=2)
+            humidity = day.get('humidity', 'N/A')
+            precip = day.get('precip', 'N/A')
+            sunrise = day.get('sunrise', 'N/A')
+            sunset = day.get('sunset', 'N/A')
+            vis = day.get('vis', 'N/A')
+            uv_index = day.get('uvIndex', 'N/A')
 
             # --- 构建格式化字符串列表 ---
             # 注意：MarkdownV2 需要对 | ~ 等特殊字符进行转义
             daily_info = [
                 f"🗓 *{date_str} {moon_phase}*",
-                f"├─ 温度: {temp_min}\\~{temp_max}°C",
+                f"├─ 温度: {temp_min}~{temp_max}°C",
                 f"├─ 日间: {day_icon} {text_day}",
                 f"│   └─ {wind_dir_day} {wind_scale_day}级",
                 f"├─ 夜间: {night_icon} {text_night}",
                 f"│   └─ {wind_dir_night} {wind_scale_night}级",
                 f"└─ 详情:",
-                f"    💧 湿度: {humidity}% \\| ☔️ 降水: {precip}mm",
-                f"    🌅 日出: {sunrise} \\| 🌄 日落: {sunset}",
-                f"    👁️ 能见度: {vis}km \\| ☀️ UV指数: {uv_index}"
+                f"    💧 湿度: {humidity}% | ☔️ 降水: {precip}mm",
+                f"    🌅 日出: {sunrise} | 🌄 日落: {sunset}",
+                f"    👁️ 能见度: {vis}km | ☀️ UV指数: {uv_index}"
             ]
             
             result_lines.append("\n".join(daily_info))
@@ -202,8 +203,8 @@ def format_hourly_weather(hourly_data: list[dict]) -> str:
             temp = escape_markdown(hour.get('temp', 'N/A'), version=2)
             icon = WEATHER_ICONS.get(hour.get("icon"), "❓")
             text = escape_markdown(hour.get('text', 'N/A'), version=2)
-            wind_dir = escape_markdown(hour.get('windDir', 'N/A'), version=2)
-            wind_scale = escape_markdown(hour.get('windScale', 'N/A'), version=2)
+            wind_dir = hour.get('windDir', 'N/A')
+            wind_scale = hour.get('windScale', 'N/A')
             humidity = escape_markdown(hour.get('humidity', 'N/A'), version=2)
             # 和风天气API返回的pop是字符串"0"~"100"，直接用即可
             pop = escape_markdown(hour.get('pop', 'N/A'), version=2) 
@@ -213,7 +214,7 @@ def format_hourly_weather(hourly_data: list[dict]) -> str:
                 f"⏰ {time_str}",
                 f"🌡️ {temp}°C {icon} {text}",
                 f"💨 {wind_dir} {wind_scale}级",
-                f"💧 湿度: {humidity}% \\| ☔️ 降水概率: {pop}%",
+                f"💧 湿度: {humidity}% | ☔️ 降水概率: {pop}%",
                 "━━━━━━━━━━━━━━━━━━━━" # 分隔线
             ]
             result_lines.append("\n".join(hourly_info))
@@ -233,15 +234,15 @@ def format_minutely_rainfall(rainfall_data: dict) -> str:
     result = []
 
     # 1. 添加摘要和主分隔线
-    summary = escape_markdown(rainfall_data.get('summary', '暂无降水信息'), version=2)
+    summary = rainfall_data.get('summary', '暂无降水信息')
     result.append(f"📝 {summary}")
     result.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
     # 2. 遍历每个时间点的数据并格式化
     for minute in rainfall_data.get("minutely", []):
         try:
-            time_str = escape_markdown(datetime.datetime.fromisoformat(minute.get("fxTime").replace('Z', '+00:00')).strftime('%H:%M'), version=2)
-            precip = escape_markdown(minute.get('precip', 'N/A'), version=2)
+            time_str = datetime.datetime.fromisoformat(minute.get("fxTime").replace('Z', '+00:00')).strftime('%H:%M')
+            precip = minute.get('precip', 'N/A')
             
             precip_type_text = "雨" if minute.get("type") == "rain" else "雪"
             precip_type_icon = "🌧️" if minute.get("type") == "rain" else "❄️"
@@ -250,7 +251,7 @@ def format_minutely_rainfall(rainfall_data: dict) -> str:
             minute_info = (
                 f"\n⏰ {time_str}\n"
                 # ↓↓↓ 修正了这一行，为括号添加了转义符 \ ↓↓↓
-                f"💧 预计降水: {precip}mm \({precip_type_icon} {precip_type_text}\)\n"
+                f"💧 预计降水: {precip}mm ({precip_type_icon} {precip_type_text})\n"
                 "━━━━━━━━━━━━━━━━━━━━"
             )
             result.append(minute_info)
@@ -277,7 +278,7 @@ def format_indices_data(indices_data: dict) -> str:
     
     # 2. 遍历每个日期，生成该日期的指数报告
     for date, indices in sorted(grouped_by_date.items()):
-        date_str = escape_markdown(datetime.datetime.strptime(date, "%Y-%m-%d").strftime("%m-%d"), version=2)
+        date_str = datetime.datetime.strptime(date, "%Y-%m-%d").strftime("%m-%d")
         result.append(f"\n📅 *{date_str} 天气生活指数*")
 
         # 3. 遍历预设的分类，在当前日期的指数中查找并显示
@@ -290,9 +291,9 @@ def format_indices_data(indices_data: dict) -> str:
                 for index in category_indices:
                     index_type = index.get("type")
                     emoji = INDICES_EMOJI.get(index_type, "ℹ️") # 获取对应的Emoji
-                    name = escape_markdown(index.get('name', 'N/A'), version=2)
-                    level = escape_markdown(index.get('category', 'N/A'), version=2)
-                    text = escape_markdown(index.get('text', 'N/A'), version=2)
+                    name = index.get('name', 'N/A')
+                    level = index.get('category', 'N/A')
+                    text = index.get('text', 'N/A')
                     
                     # 构建最终的图文并茂格式
                     result.append(f"{emoji} *{name}*: {level}")
@@ -302,15 +303,15 @@ def format_indices_data(indices_data: dict) -> str:
 
 def format_air_quality(air_data: dict) -> str:
     aqi_data = air_data.get('now', {})
-    aqi = escape_markdown(aqi_data.get('aqi', 'N/A'), version=2)
-    category = escape_markdown(aqi_data.get('category', 'N/A'), version=2)
-    primary = escape_markdown(aqi_data.get('primary', 'NA'), version=2)
+    aqi = aqi_data.get('aqi', 'N/A')
+    category = aqi_data.get('category', 'N/A')
+    primary = aqi_data.get('primary', 'NA')
     lines = [
-        f"\n🌫️ *空气质量*：{aqi} \\({category}\\)",
+        f"\n🌫️ *空气质量*：{aqi} ({category})",
         f"🔍 主要污染物：{primary}",
-        f"🌬️ PM2\\.5：{escape_markdown(aqi_data.get('pm2p5', 'N/A'), version=2)}μg/m³ \\| PM10：{escape_markdown(aqi_data.get('pm10', 'N/A'), version=2)}μg/m³",
-        f"🌡️ SO₂：{escape_markdown(aqi_data.get('so2', 'N/A'), version=2)}μg/m³ \\| NO₂：{escape_markdown(aqi_data.get('no2', 'N/A'), version=2)}μg/m³",
-        f"💨 CO：{escape_markdown(aqi_data.get('co', 'N/A'), version=2)}mg/m³ \\| O₃：{escape_markdown(aqi_data.get('o3', 'N/A'), version=2)}μg/m³"
+        f"🌬️ PM2.5：{aqi_data.get('pm2p5', 'N/A')}μg/m³ | PM10：{aqi_data.get('pm10', 'N/A')}μg/m³",
+        f"🌡️ SO₂：{aqi_data.get('so2', 'N/A')}μg/m³ | NO₂：{aqi_data.get('no2', 'N/A')}μg/m³",
+        f"💨 CO：{aqi_data.get('co', 'N/A')}mg/m³ | O₃：{aqi_data.get('o3', 'N/A')}μg/m³"
     ]
     return "\n".join(lines)
 
@@ -321,21 +322,21 @@ def format_realtime_weather(realtime_data: dict, location_name: str) -> str:
     try:
         obs_time_utc = datetime.datetime.fromisoformat(now.get('obsTime', '').replace('Z', '+00:00'))
         obs_time_local = obs_time_utc.astimezone(datetime.timezone(datetime.timedelta(hours=8)))
-        obs_time_str = escape_markdown(obs_time_local.strftime('%Y-%m-%d %H:%M'), version=2)
+        obs_time_str = obs_time_local.strftime('%Y-%m-%d %H:%M')
     except: pass
     lines = [
-        f"🌍 *{escape_markdown(location_name, version=2)}* 的实时天气：\n",
+        f"🌍 *{location_name}* 的实时天气：\n",
         f"🕐 观测时间：{obs_time_str}",
-        f"🌤️ 天气：{icon} {escape_markdown(now.get('text', 'N/A'), version=2)}",
-        f"🌡️ 温度：{escape_markdown(now.get('temp', 'N/A'), version=2)}°C",
-        f"🌡️ 体感温度：{escape_markdown(now.get('feelsLike', 'N/A'), version=2)}°C",
-        f"💨 {escape_markdown(now.get('windDir', 'N/A'), version=2)} {escape_markdown(now.get('windScale', 'N/A'), version=2)}级 \\({escape_markdown(now.get('windSpeed', 'N/A'), version=2)}km/h\\)",
-        f"💧 相对湿度：{escape_markdown(now.get('humidity', 'N/A'), version=2)}%",
-        f"☔️ 降水量：{escape_markdown(now.get('precip', 'N/A'), version=2)}mm",
-        f"👀 能见度：{escape_markdown(now.get('vis', 'N/A'), version=2)}km",
-        f"☁️ 云量：{escape_markdown(now.get('cloud', 'N/A'), version=2)}%",
-        f"🌫️ 露点温度：{escape_markdown(now.get('dew', 'N/A'), version=2)}°C",
-        f"📈 气压：{escape_markdown(now.get('pressure', 'N/A'), version=2)}hPa"
+        f"🌤️ 天气：{icon} {now.get('text', 'N/A')}",
+        f"🌡️ 温度：{now.get('temp', 'N/A')}°C",
+        f"🌡️ 体感温度：{now.get('feelsLike', 'N/A')}°C",
+        f"💨 {now.get('windDir', 'N/A')} {now.get('windScale', 'N/A')}级 ({now.get('windSpeed', 'N/A')}km/h)",
+        f"💧 相对湿度：{now.get('humidity', 'N/A')}%",
+        f"☔️ 降水量：{now.get('precip', 'N/A')}mm",
+        f"👀 能见度：{now.get('vis', 'N/A')}km",
+        f"☁️ 云量：{now.get('cloud', 'N/A')}%",
+        f"🌫️ 露点温度：{now.get('dew', 'N/A')}°C",
+        f"📈 气压：{now.get('pressure', 'N/A')}hPa"
     ]
     return "\n".join(lines)
 
@@ -444,7 +445,16 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             else:
                 result_text = f"\n❌ 获取 *{safe_location_name}* 的天气信息失败。"
 
-    await message.edit_text(result_text, parse_mode=ParseMode.MARKDOWN_V2, disable_web_page_preview=True)
+    await message.edit_text(
+    foldable_text_with_markdown_v2(result_text), # <--- 在这里把它包起来！
+    parse_mode=ParseMode.MARKDOWN_V2, 
+    disable_web_page_preview=True
+)
+
+    # 调度删除机器人回复消息，使用配置的延迟时间
+    from utils.message_manager import _schedule_deletion
+    config = get_config()
+    await _schedule_deletion(context, update.effective_chat.id, message.message_id, config.auto_delete_delay)
 
 command_factory.register_command(
     "tq",
