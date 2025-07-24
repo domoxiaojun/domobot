@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 class BotConfig:
     """机器人配置类"""
 
+    # 新增和风天气配置
+    qweather_api_key: str = ""
+    
     # Webhook 配置
     webhook_url: str = ""
     webhook_listen: str = "0.0.0.0"
@@ -25,6 +28,10 @@ class BotConfig:
     webhook_secret_token: str = ""
     webhook_key: str = ""
     webhook_cert: str = ""
+
+    qweather_kid: str = ""
+    qweather_sub: str = ""  # <--- 把这个新口袋加上！
+    qweather_private_key: str = ""
 
     # 基础配置
     bot_token: str = ""
@@ -154,7 +161,6 @@ class ConfigManager:
 
             # 加载环境变量
             self._load_from_environment()
-
             # 验证配置
             self._validate_config()
 
@@ -267,7 +273,9 @@ class ConfigManager:
         # Redis 连接池配置
         self.config.redis_max_connections = int(os.getenv("REDIS_MAX_CONNECTIONS", "50"))
         self.config.redis_health_check_interval = int(os.getenv("REDIS_HEALTH_CHECK_INTERVAL", "30"))
-
+        # --- ✨✨✨ 2. 在这里加上读取天气配置的代码 ✨✨✨ ---
+        # 和风天气 API 配置
+        self.config.qweather_api_key = os.getenv("QWEATHER_API_KEY", "")
         # MySQL 配置
         self.config.db_host = os.getenv("DB_HOST", "localhost")
         self.config.db_port = int(os.getenv("DB_PORT", "3306"))
