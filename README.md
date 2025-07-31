@@ -3,7 +3,7 @@
 这是一个基于 Python 的多功能 Telegram 价格查询机器人，支持以下功能：
 - 汇率实时查询和转换
 - Steam 游戏价格多国对比
-- Netflix、Disney+、Spotify 等流媒体订阅价格查询
+- Netflix、Disney+、Spotify、HBO Max 等流媒体订阅价格查询
 - App Store、Google Play 应用价格查询
 - 管理员权限系统和用户白名单管理
 - 用户缓存管理和统计功能
@@ -19,9 +19,6 @@ pip install -r requirements.txt
 # 运行机器人
 python main.py
 
-# 手动清理日志
-python cleanup_logs.py
-```
 
 ### Docker 部署
 
