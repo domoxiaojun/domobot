@@ -79,7 +79,7 @@ _PATTERN_AMOUNT_FIRST = re.compile(rf"^(?P<amount>.*?)\s*(?P<currency>{_currency
 
 
 def detect_currency_from_context(currency_symbol: str, price_str: str, country_code: str | None = None) -> str:
-    """Smartly detects currency, especially for the ambiguous ¥ symbol."""
+    """Smartly detects currency, especially for the ambiguous ¥ and $ symbols."""
     if currency_symbol == "¥":
         if country_code:
             if country_code in ["CN", "HK", "TW", "MO"]:
@@ -101,6 +101,26 @@ def detect_currency_from_context(currency_symbol: str, price_str: str, country_c
             if max_num <= 100:
                 return "CNY"
         return "CNY"
+
+    # Handle $ symbol based on country_code
+    # Many countries use $ symbol, but we only handle confirmed ones to avoid false positives
+    # Countries where App Store uses local $ currency (not USD):
+    # TW (TWD), HK (HKD), AU (AUD), CA (CAD), NZ (NZD), SG (SGD)
+    if currency_symbol == "$":
+        if country_code:
+            # Whitelist of countries confirmed to use local $ currency in App Store
+            dollar_currency_map = {
+                "TW": "TWD",  # 台湾新台币
+                "HK": "HKD",  # 港币
+                "AU": "AUD",  # 澳元
+                "CA": "CAD",  # 加元
+                "NZ": "NZD",  # 新西兰元
+                "SG": "SGD",  # 新加坡元
+            }
+            if country_code in dollar_currency_map:
+                return dollar_currency_map[country_code]
+        # Default to USD for all other cases (including AR, UY, etc.)
+        return "USD"
 
     return CURRENCY_SYMBOL_TO_CODE.get(currency_symbol, "USD")
 
