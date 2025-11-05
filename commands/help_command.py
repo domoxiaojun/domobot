@@ -64,7 +64,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 - `/nf`: 查看Netflix全球价格排名。
 - `/steam 赛博朋克`: 查询《赛博朋克2077》的价格。
 - `/rate`: 查看汇率转换的详细帮助。
-- `/id`: 获取用户或群组的ID信息。
+- `/info`: 获取对话、用户和消息的详细信息。
 
 🔄 *消息管理:*
 - 所有回复消息会自动删除以保持群聊整洁。

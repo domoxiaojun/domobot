@@ -22,12 +22,13 @@ logger = logging.getLogger(__name__)
 ALERT_TEMPLATE = """🚗 <b>发车啦！请仔细核对车主信息</b> 🚙
 
 <b>唯一车主：</b> @{owner_username} 🆔 <code>{owner_id}</code>
-<b>核对链接：</b><a href='{user_link}'>✅ 点击这里，核对车主身份</a>
+<b>✅ 点击这里，核对车主身份：</b> {user_link}
 
 🚨 <b>安全提醒：</b>
 1.  <b>主动私聊你的都是骗子！</b> 请务必通过上方链接联系车主。
-2.  上车前请确认好价格、时长和使用规则。
-3.  祝您拼车愉快！"""
+2.  <b>强烈建议添加支付宝好友转账结算车费！</b> 
+3.  上车前请确认好价格、时长和使用规则。
+4.  祝您拼车愉快！"""
 
 # 全局变量，在 load 函数中初始化
 user_cache_manager = None

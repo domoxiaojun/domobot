@@ -15,11 +15,11 @@ logger = logging.getLogger(__name__)
 
 class BotConfig:
     """机器人配置类"""
-    
+
     def __init__(self):
         # 新增和风天气配置
         self.qweather_api_key = ""
-        
+
         # Webhook 配置
         self.webhook_url = ""
         self.webhook_listen = "0.0.0.0"
@@ -32,6 +32,10 @@ class BotConfig:
         self.bot_token = ""
         self.super_admin_id = 0
         self.debug = False
+
+        # Telegram API 配置（用于 Pyrogram 客户端）
+        self.telegram_api_id = ""
+        self.telegram_api_hash = ""
 
         # 数据库配置（已统一使用 MySQL）
 
@@ -88,7 +92,9 @@ class BotConfig:
         }
 
         # UI 配置
-        self.folding_threshold = 15  # 消息折叠阈值（行数），超过此行数的消息将被折叠显示
+        self.folding_threshold = (
+            15  # 消息折叠阈值（行数），超过此行数的消息将被折叠显示
+        )
 
         # 消息自动删除配置
         self.auto_delete_delay = 180  # 自动删除延迟时间（秒），默认3分钟
@@ -172,15 +178,15 @@ class ConfigManager:
 
     def _load_from_environment(self):
         """从环境变量加载配置"""
-        
+
         # 辅助方法：读取布尔值环境变量
         def get_bool_env(key: str, default: str = "False") -> bool:
             return os.getenv(key, default).lower() == "true"
-            
+
         # 辅助方法：读取整数环境变量
         def get_int_env(key: str, default: str) -> int:
             return int(os.getenv(key, default))
-        
+
         # 基础配置
         self.config.bot_token = os.getenv("BOT_TOKEN", "")
         self.config.super_admin_id = get_int_env("SUPER_ADMIN_ID", "0")
@@ -188,34 +194,56 @@ class ConfigManager:
 
         # 缓存配置
         self.config.cache_dir = os.getenv("CACHE_DIR", "cache")
-        self.config.default_cache_duration = get_int_env("DEFAULT_CACHE_DURATION", "3600")
+        self.config.default_cache_duration = get_int_env(
+            "DEFAULT_CACHE_DURATION", "3600"
+        )
         self.config.rate_cache_duration = get_int_env("RATE_CACHE_DURATION", "3600")
 
         # 各服务缓存配置
-        self.config.app_store_cache_duration = get_int_env("APP_STORE_CACHE_DURATION", "1209600")
-        self.config.app_store_search_cache_duration = get_int_env("APP_STORE_SEARCH_CACHE_DURATION", "1209600")
-        self.config.apple_services_cache_duration = get_int_env("APPLE_SERVICES_CACHE_DURATION", "86400")
-        self.config.google_play_app_cache_duration = get_int_env("GOOGLE_PLAY_APP_CACHE_DURATION", "21600")
-        self.config.google_play_search_cache_duration = get_int_env("GOOGLE_PLAY_SEARCH_CACHE_DURATION", "43200")
+        self.config.app_store_cache_duration = get_int_env(
+            "APP_STORE_CACHE_DURATION", "1209600"
+        )
+        self.config.app_store_search_cache_duration = get_int_env(
+            "APP_STORE_SEARCH_CACHE_DURATION", "1209600"
+        )
+        self.config.apple_services_cache_duration = get_int_env(
+            "APPLE_SERVICES_CACHE_DURATION", "86400"
+        )
+        self.config.google_play_app_cache_duration = get_int_env(
+            "GOOGLE_PLAY_APP_CACHE_DURATION", "21600"
+        )
+        self.config.google_play_search_cache_duration = get_int_env(
+            "GOOGLE_PLAY_SEARCH_CACHE_DURATION", "43200"
+        )
         self.config.steam_cache_duration = get_int_env("STEAM_CACHE_DURATION", "259200")
-        self.config.netflix_cache_duration = get_int_env("NETFLIX_CACHE_DURATION", "86400")
+        self.config.netflix_cache_duration = get_int_env(
+            "NETFLIX_CACHE_DURATION", "86400"
+        )
 
         # 定时清理配置
         self.config.spotify_weekly_cleanup = get_bool_env("SPOTIFY_WEEKLY_CLEANUP")
         self.config.disney_weekly_cleanup = get_bool_env("DISNEY_WEEKLY_CLEANUP")
 
         # API配置
-        keys_str = os.getenv("EXCHANGE_RATE_API_KEYS") or os.getenv("EXCHANGE_RATE_API_KEY", "")
-        self.config.exchange_rate_api_keys = [key.strip() for key in keys_str.split(",") if key.strip()]
+        keys_str = os.getenv("EXCHANGE_RATE_API_KEYS") or os.getenv(
+            "EXCHANGE_RATE_API_KEY", ""
+        )
+        self.config.exchange_rate_api_keys = [
+            key.strip() for key in keys_str.split(",") if key.strip()
+        ]
 
         # 性能配置
-        self.config.max_concurrent_requests = get_int_env("MAX_CONCURRENT_REQUESTS", "10")
+        self.config.max_concurrent_requests = get_int_env(
+            "MAX_CONCURRENT_REQUESTS", "10"
+        )
         self.config.request_timeout = get_int_env("REQUEST_TIMEOUT", "30")
         self.config.max_retries = get_int_env("MAX_RETRIES", "3")
 
         # 速率限制配置
         self.config.rate_limit_enabled = get_bool_env("RATE_LIMIT_ENABLED", "True")
-        self.config.max_requests_per_minute = get_int_env("MAX_REQUESTS_PER_MINUTE", "30")
+        self.config.max_requests_per_minute = get_int_env(
+            "MAX_REQUESTS_PER_MINUTE", "30"
+        )
 
         # 日志配置
         self.config.log_level = os.getenv("LOG_LEVEL", "INFO")
@@ -230,21 +258,29 @@ class ConfigManager:
             self.config.features[feature] = get_bool_env(env_key, "True")
 
         # UI 配置
-        self.config.folding_threshold = get_int_env("FOLDING_THRESHOLD", "15")  # 默认15行
+        self.config.folding_threshold = get_int_env(
+            "FOLDING_THRESHOLD", "15"
+        )  # 默认15行
 
         # 消息自动删除配置
         # 支持 DEFAULT_MESSAGE_DELETE_DELAY 作为 AUTO_DELETE_DELAY 的别名
-        default_delay = os.getenv("DEFAULT_MESSAGE_DELETE_DELAY", os.getenv("AUTO_DELETE_DELAY", "180"))
+        default_delay = os.getenv(
+            "DEFAULT_MESSAGE_DELETE_DELAY", os.getenv("AUTO_DELETE_DELAY", "180")
+        )
         self.config.auto_delete_delay = int(default_delay)
         self.config.delete_user_commands = get_bool_env("DELETE_USER_COMMANDS", "True")
-        self.config.user_command_delete_delay = get_int_env("USER_COMMAND_DELETE_DELAY", "0")
+        self.config.user_command_delete_delay = get_int_env(
+            "USER_COMMAND_DELETE_DELAY", "0"
+        )
 
         # 用户缓存配置
         self.config.enable_user_cache = get_bool_env("ENABLE_USER_CACHE")
         cache_group_ids_str = os.getenv("USER_CACHE_GROUP_IDS", "")
         if cache_group_ids_str:
             self.config.user_cache_group_ids = [
-                int(gid.strip()) for gid in cache_group_ids_str.split(",") if gid.strip()
+                int(gid.strip())
+                for gid in cache_group_ids_str.split(",")
+                if gid.strip()
             ]
 
         # 自定义脚本配置
@@ -254,10 +290,14 @@ class ConfigManager:
 
             self.config.alerter_config = json.loads(alerter_config_str)
         except json.JSONDecodeError:
-            logger.error("Failed to parse ALERTER_CONFIG JSON string. Using empty config.")
+            logger.error(
+                "Failed to parse ALERTER_CONFIG JSON string. Using empty config."
+            )
             self.config.alerter_config = {}
         self.config.load_custom_scripts = get_bool_env("LOAD_CUSTOM_SCRIPTS")
-        self.config.custom_scripts_dir = os.getenv("CUSTOM_SCRIPTS_DIR", "custom_scripts")
+        self.config.custom_scripts_dir = os.getenv(
+            "CUSTOM_SCRIPTS_DIR", "custom_scripts"
+        )
 
         # Redis 配置
         self.config.redis_host = os.getenv("REDIS_HOST", "localhost")
@@ -266,11 +306,17 @@ class ConfigManager:
         self.config.redis_db = get_int_env("REDIS_DB", "0")
         # Redis 连接池配置
         self.config.redis_max_connections = get_int_env("REDIS_MAX_CONNECTIONS", "50")
-        self.config.redis_health_check_interval = get_int_env("REDIS_HEALTH_CHECK_INTERVAL", "30")
-        
+        self.config.redis_health_check_interval = get_int_env(
+            "REDIS_HEALTH_CHECK_INTERVAL", "30"
+        )
+
         # 和风天气 API 配置
         self.config.qweather_api_key = os.getenv("QWEATHER_API_KEY", "")
-        
+
+        # Telegram API 配置
+        self.config.telegram_api_id = os.getenv("TELEGRAM_API_ID", "")
+        self.config.telegram_api_hash = os.getenv("TELEGRAM_API_HASH", "")
+
         # MySQL 配置
         self.config.db_host = os.getenv("DB_HOST", "localhost")
         self.config.db_port = get_int_env("DB_PORT", "3306")
@@ -286,7 +332,9 @@ class ConfigManager:
         if self.config.webhook_url:
             self.config.webhook_listen = os.getenv("WEBHOOK_LISTEN", "0.0.0.0")
             self.config.webhook_port = get_int_env("WEBHOOK_PORT", "8443")
-            self.config.webhook_secret_token = os.getenv("WEBHOOK_SECRET_TOKEN") or secrets.token_hex(32)
+            self.config.webhook_secret_token = os.getenv(
+                "WEBHOOK_SECRET_TOKEN"
+            ) or secrets.token_hex(32)
 
     def _validate_config(self):
         """验证配置"""

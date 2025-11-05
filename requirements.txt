@@ -1,6 +1,10 @@
 # Core Telegram Bot Framework (with all optional dependencies)
 python-telegram-bot[all]==22.2
 
+# Telegram Client API (for advanced user info)
+pyrogram==2.0.106
+tgcrypto==1.2.5
+
 # Environment Configuration
 python-dotenv==1.0.0
 

@@ -13,17 +13,20 @@ from telegram.ext import (
 
 from utils.command_factory import command_factory
 from utils.config_manager import get_config
-from utils.formatter import foldable_text_v2, foldable_text_with_markdown_v2
+from utils.formatter import foldable_text_with_markdown_v2
 from utils.message_manager import (
-    send_message_with_auto_delete,
     send_error,
     send_success,
-    send_info,
-    delete_user_command,
-    MessageType,
     _schedule_deletion,
 )
 from utils.permissions import Permission
+from utils.pyrogram_client import (
+    save_pyrogram_credentials,
+    get_pyrogram_login_status,
+    start_phone_login,
+    complete_phone_login,
+    logout_pyrogram_user,
+)
 # 已移除 tasks、scripts、logs 命令（旧系统遗留功能）
 
 
@@ -203,7 +206,13 @@ async def addgroup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     AWAITING_GROUP_ID_TO_REMOVE,
     AWAITING_ADMIN_ID_TO_ADD,
     AWAITING_ADMIN_ID_TO_REMOVE,
-) = range(10)
+    PYROGRAM_PANEL,
+    AWAITING_API_ID,
+    AWAITING_API_HASH,
+    AWAITING_PHONE_NUMBER,
+    AWAITING_PHONE_CODE,
+    AWAITING_2FA_PASSWORD,
+) = range(16)
 
 
 class AdminPanelHandler:
@@ -239,6 +248,7 @@ class AdminPanelHandler:
         keyboard = [
             [InlineKeyboardButton("👤 管理用户白名单", callback_data="manage_users")],
             [InlineKeyboardButton("👨‍👩‍👧‍👦 管理群组白名单", callback_data="manage_groups")],
+            [InlineKeyboardButton("📱 Pyrogram 用户登录", callback_data="manage_pyrogram")],
         ]
         if await is_super_admin(user_id):
             keyboard.insert(0, [InlineKeyboardButton("👥 管理管理员", callback_data="manage_admins")])
@@ -496,6 +506,352 @@ class AdminPanelHandler:
 
         return await self._handle_modification(u, c, remove_func, "成功移除", "移除失败", "管理员")
 
+    # ============ Pyrogram 管理面板 ============
+
+    async def _display_pyrogram_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """内部方法：显示 Pyrogram 面板（支持 callback 和 message 两种场景）"""
+        # 获取 Redis 客户端
+        redis_client = context.bot_data.get("cache_manager").redis_client if context.bot_data.get("cache_manager") else None
+        if not redis_client:
+            if update.callback_query:
+                await update.callback_query.answer("❌ Redis 客户端未初始化", show_alert=True)
+            return MAIN_PANEL
+
+        # 获取登录状态
+        status = await get_pyrogram_login_status(redis_client)
+
+        # 构建状态文本
+        text = "📱 *Pyrogram 用户登录管理*\n\n"
+        text += "━━━━━━ 当前状态 ━━━━━━\n"
+        text += f"API 配置: {'✅ 已配置' if status['api_configured'] else '❌ 未配置'}\n"
+        text += f"登录状态: {'✅ 已登录' if status['is_logged_in'] else '❌ 未登录'}\n"
+
+        if status['phone_number']:
+            phone = status['phone_number']
+            masked_phone = f"{phone[:3]}****{phone[-4:]}" if len(phone) > 7 else phone
+            text += f"手机号: {masked_phone}\n"
+
+        if status['login_time']:
+            text += f"登录时间: {status['login_time'].strftime('%Y-%m-%d %H:%M')}\n"
+
+        text += "\n━━━━━━ 操作菜单 ━━━━━━"
+
+        # 构建键盘
+        keyboard = []
+        if not status['api_configured']:
+            keyboard.append([InlineKeyboardButton("⚙️ 配置 API", callback_data="pyrogram_config_api")])
+        else:
+            if not status['is_logged_in']:
+                keyboard.append([InlineKeyboardButton("📞 手机号登录", callback_data="pyrogram_phone_login")])
+            else:
+                keyboard.append([InlineKeyboardButton("🚪 登出", callback_data="pyrogram_logout")])
+
+        keyboard.append([InlineKeyboardButton("🔙 返回主菜单", callback_data="back_to_main")])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # 根据是否有 callback_query 来决定是编辑还是发送新消息
+        if update.callback_query:
+            await self._show_panel(update.callback_query, text, reply_markup)
+        else:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=foldable_text_with_markdown_v2(text),
+                parse_mode="MarkdownV2",
+                reply_markup=reply_markup,
+            )
+
+        return PYROGRAM_PANEL
+
+    async def show_pyrogram_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """显示 Pyrogram 登录状态和管理面板（从 callback 调用）"""
+        query = update.callback_query
+        if not query:
+            return MAIN_PANEL
+
+        await query.answer()
+        return await self._display_pyrogram_panel(update, context)
+
+    async def start_api_config(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """开始配置 API ID"""
+        query = update.callback_query
+        await query.answer()
+
+        text = (
+            "⚙️ *配置 Telegram API*\n\n"
+            "步骤 1/2: 请输入 API ID\n\n"
+            "📝 如何获取:\n"
+            "1\\. 访问 https://my\\.telegram\\.org/apps\n"
+            "2\\. 使用你的手机号登录\n"
+            "3\\. 创建应用并获取 API ID\n\n"
+            "⚠️ 请直接输入纯数字，例如: `12345678`\n\n"
+            "💡 输入 /cancel 取消操作"
+        )
+
+        await query.edit_message_text(
+            foldable_text_with_markdown_v2(text),
+            parse_mode="MarkdownV2"
+        )
+
+        return AWAITING_API_ID
+
+    async def handle_api_id(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """处理 API ID 输入"""
+        user_message = update.message
+
+        # 删除用户消息
+        await _schedule_deletion(
+            chat_id=user_message.chat_id,
+            message_id=user_message.message_id,
+            delay=0,
+            context=context
+        )
+
+        try:
+            api_id = int(user_message.text.strip())
+            # 临时保存到 context
+            context.user_data["temp_api_id"] = api_id
+
+            text = (
+                "⚙️ *配置 Telegram API*\n\n"
+                f"✅ API ID 已记录: `{api_id}`\n\n"
+                "步骤 2/2: 请输入 API Hash\n\n"
+                "API Hash 是一个 32 位的十六进制字符串\n"
+                "例如: `a1b2c3d4e5f67890abcdef1234567890`\n\n"
+                "💡 输入 /cancel 取消操作"
+            )
+
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=foldable_text_with_markdown_v2(text),
+                parse_mode="MarkdownV2"
+            )
+
+            return AWAITING_API_HASH
+
+        except ValueError:
+            await send_error(context, update.effective_chat.id, "❌ API ID 必须是纯数字，请重新输入")
+            return AWAITING_API_ID
+
+    async def handle_api_hash(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """处理 API Hash 输入"""
+        user_message = update.message
+
+        # 删除用户消息（包含敏感信息）
+        await _schedule_deletion(
+            chat_id=user_message.chat_id,
+            message_id=user_message.message_id,
+            delay=0,
+            context=context
+        )
+
+        api_hash = user_message.text.strip()
+
+        # 简单验证（32位十六进制）
+        if len(api_hash) != 32 or not all(c in '0123456789abcdefABCDEF' for c in api_hash):
+            await send_error(context, update.effective_chat.id, "❌ API Hash 格式不正确，请输入 32 位十六进制字符串")
+            return AWAITING_API_HASH
+
+        # 获取之前保存的 API ID
+        api_id = context.user_data.get("temp_api_id")
+        if not api_id:
+            await send_error(context, update.effective_chat.id, "❌ 会话超时，请重新开始配置")
+            return await self.show_main_panel(update, context)
+
+        # 保存到 Redis
+        redis_client = context.bot_data.get("cache_manager").redis_client
+        success = await save_pyrogram_credentials(redis_client, api_id, api_hash)
+
+        # 清除临时数据
+        context.user_data.pop("temp_api_id", None)
+
+        if success:
+            await send_success(context, update.effective_chat.id, "✅ API 配置成功！现在可以使用手机号登录了")
+            # 直接调用内部方法显示 Pyrogram 面板
+            return await self._display_pyrogram_panel(update, context)
+        else:
+            await send_error(context, update.effective_chat.id, "❌ 保存 API 配置失败")
+            return await self.show_main_panel(update, context)
+
+    async def start_phone_login(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """开始手机号登录流程"""
+        query = update.callback_query
+        await query.answer()
+
+        text = (
+            "📞 *手机号登录*\n\n"
+            "请输入你的手机号（国际格式）\n\n"
+            "格式示例:\n"
+            "\\- 中国: `\\+8613812341234`\n"
+            "\\- 美国: `\\+11234567890`\n"
+            "\\- 其他国家: `\\+国家代码手机号`\n\n"
+            "⚠️ 必须包含国家代码（前面加 \\+）\n\n"
+            "💡 输入 /cancel 取消操作"
+        )
+
+        await query.edit_message_text(
+            foldable_text_with_markdown_v2(text),
+            parse_mode="MarkdownV2"
+        )
+
+        return AWAITING_PHONE_NUMBER
+
+    async def handle_phone_number(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """处理手机号输入"""
+        user_message = update.message
+
+        # 删除用户消息
+        await _schedule_deletion(
+            chat_id=user_message.chat_id,
+            message_id=user_message.message_id,
+            delay=0,
+            context=context
+        )
+
+        phone_number = user_message.text.strip()
+
+        # 简单验证手机号格式
+        if not phone_number.startswith('+') or len(phone_number) < 10:
+            await send_error(context, update.effective_chat.id, "❌ 手机号格式不正确，必须使用国际格式（如 +8613812341234）")
+            return AWAITING_PHONE_NUMBER
+
+        # 保存手机号到 context
+        context.user_data["phone_number"] = phone_number
+
+        # 发送验证码
+        result = await start_phone_login(phone_number, update.effective_user.id)
+
+        if result["success"]:
+            text = (
+                "📞 *验证码已发送*\n\n"
+                f"{result['message']}\n\n"
+                "请输入收到的验证码\n\n"
+                "⚠️ 验证码有效期 5 分钟\n\n"
+                "💡 输入 /cancel 取消操作"
+            )
+
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=foldable_text_with_markdown_v2(text),
+                parse_mode="MarkdownV2"
+            )
+
+            return AWAITING_PHONE_CODE
+        else:
+            await send_error(context, update.effective_chat.id, f"❌ {result['message']}")
+            return AWAITING_PHONE_NUMBER
+
+    async def handle_phone_code(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """处理验证码输入"""
+        user_message = update.message
+
+        # 删除用户消息（包含验证码）
+        await _schedule_deletion(
+            chat_id=user_message.chat_id,
+            message_id=user_message.message_id,
+            delay=0,
+            context=context
+        )
+
+        phone_code = user_message.text.strip()
+        phone_number = context.user_data.get("phone_number")
+
+        if not phone_number:
+            await send_error(context, update.effective_chat.id, "❌ 会话超时，请重新开始登录")
+            return await self.show_main_panel(update, context)
+
+        # 保存 phone_code 以便 2FA 时使用
+        context.user_data["phone_code"] = phone_code
+
+        # 完成登录
+        result = await complete_phone_login(phone_number, phone_code, update.effective_user.id)
+
+        if result["success"]:
+            # 清除临时数据
+            context.user_data.pop("phone_number", None)
+            context.user_data.pop("phone_code", None)
+
+            await send_success(context, update.effective_chat.id, "✅ 登录成功！")
+
+            # 直接调用内部方法显示 Pyrogram 面板
+            return await self._display_pyrogram_panel(update, context)
+
+        elif result.get("requires_password"):
+            # 需要双重验证密码
+            text = (
+                "🔐 *双重验证*\n\n"
+                f"{result['message']}\n\n"
+                "请输入你的双重验证密码\n\n"
+                "💡 输入 /cancel 取消操作"
+            )
+
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=foldable_text_with_markdown_v2(text),
+                parse_mode="MarkdownV2"
+            )
+
+            return AWAITING_2FA_PASSWORD
+        else:
+            await send_error(context, update.effective_chat.id, f"❌ {result['message']}")
+            return AWAITING_PHONE_CODE
+
+    async def handle_2fa_password(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """处理双重验证密码输入"""
+        user_message = update.message
+
+        # 删除用户消息（包含密码）
+        await _schedule_deletion(
+            chat_id=user_message.chat_id,
+            message_id=user_message.message_id,
+            delay=0,
+            context=context
+        )
+
+        # 获取密码和手机号
+        password = user_message.text.strip()
+        phone_number = context.user_data.get("phone_number")
+        phone_code = context.user_data.get("phone_code")
+
+        if not phone_number or not phone_code:
+            await send_error(context, update.effective_chat.id, "❌ 会话超时，请重新开始登录")
+            return await self.show_main_panel(update, context)
+
+        # 使用密码完成登录
+        result = await complete_phone_login(
+            phone_number,
+            phone_code,
+            update.effective_user.id,
+            password=password
+        )
+
+        if result["success"]:
+            # 清除临时数据
+            context.user_data.pop("phone_number", None)
+            context.user_data.pop("phone_code", None)
+
+            await send_success(context, update.effective_chat.id, "✅ 登录成功！")
+            # 显示 Pyrogram 面板
+            return await self._display_pyrogram_panel(update, context)
+        else:
+            # 密码错误，允许重试
+            await send_error(context, update.effective_chat.id, f"❌ {result['message']}")
+            return AWAITING_2FA_PASSWORD
+
+    async def handle_pyrogram_logout(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """处理 Pyrogram 登出"""
+        query = update.callback_query
+        await query.answer()
+
+        success = await logout_pyrogram_user()
+
+        if success:
+            await query.answer("✅ 已登出", show_alert=True)
+        else:
+            await query.answer("❌ 登出失败", show_alert=True)
+
+        return await self.show_pyrogram_panel(update, context)
+
     async def close_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         query = update.callback_query
         if query:
@@ -609,6 +965,7 @@ class AdminPanelHandler:
                     CallbackQueryHandler(self._to_user_panel, pattern="^manage_users$"),
                     CallbackQueryHandler(self._to_group_panel, pattern="^manage_groups$"),
                     CallbackQueryHandler(self._to_admin_panel, pattern="^manage_admins$"),
+                    CallbackQueryHandler(self.show_pyrogram_panel, pattern="^manage_pyrogram$"),
                     CallbackQueryHandler(self.close_panel, pattern="^close$"),
                 ],
                 USER_PANEL: [
@@ -627,6 +984,12 @@ class AdminPanelHandler:
                     CallbackQueryHandler(self._prompt_admin_add, pattern="^admin_add$"),
                     CallbackQueryHandler(self._prompt_admin_remove, pattern="^admin_remove$"),
                     CallbackQueryHandler(self._refresh_admins, pattern="^refresh_admins$"),
+                    CallbackQueryHandler(self.show_main_panel, pattern="^back_to_main$"),
+                ],
+                PYROGRAM_PANEL: [
+                    CallbackQueryHandler(self.start_api_config, pattern="^pyrogram_config_api$"),
+                    CallbackQueryHandler(self.start_phone_login, pattern="^pyrogram_phone_login$"),
+                    CallbackQueryHandler(self.handle_pyrogram_logout, pattern="^pyrogram_logout$"),
                     CallbackQueryHandler(self.show_main_panel, pattern="^back_to_main$"),
                 ],
                 AWAITING_USER_ID_TO_ADD: [
@@ -652,6 +1015,21 @@ class AdminPanelHandler:
                 AWAITING_ADMIN_ID_TO_REMOVE: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_remove_admin),
                     CallbackQueryHandler(self.cancel_input, pattern="^cancel_input$"),
+                ],
+                AWAITING_API_ID: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_api_id),
+                ],
+                AWAITING_API_HASH: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_api_hash),
+                ],
+                AWAITING_PHONE_NUMBER: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_phone_number),
+                ],
+                AWAITING_PHONE_CODE: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_phone_code),
+                ],
+                AWAITING_2FA_PASSWORD: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_2fa_password),
                 ],
             },
             fallbacks=[CommandHandler("cancel", self.cancel_and_back)],

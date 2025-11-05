@@ -8,6 +8,10 @@ __pycache__/
 # 环境变量文件 (包含敏感信息)
 .env
 
+# Pyrogram 会话文件 (包含敏感信息)
+sessions/
+*.session
+
 # IDE 配置文件 (PyCharm)
 .idea/
 
@@ -16,3 +20,6 @@ __pycache__/
 
 # 日志文件
 *.log
+
+# 注册样本数据 (用户隐私数据)
+database/registration_samples.json

@@ -53,7 +53,10 @@ logging.basicConfig(
     level=getattr(logging, log_level, logging.INFO),
     handlers=[
         logging.handlers.RotatingFileHandler(
-            config.log_file, maxBytes=config.log_max_size, backupCount=config.log_backup_count, encoding="utf-8"
+            config.log_file,
+            maxBytes=config.log_max_size,
+            backupCount=config.log_backup_count,
+            encoding="utf-8",
         ),
         logging.StreamHandler(),
     ],
@@ -61,6 +64,9 @@ logging.basicConfig(
 
 # 设置第三方库日志级别
 logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("pyrogram").setLevel(logging.WARNING)
+logging.getLogger("pyrogram.session.session").setLevel(logging.WARNING)
+logging.getLogger("pyrogram.connection.connection").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +98,9 @@ from commands import (
     weather,
 )
 from commands.rate_command import set_rate_converter
-from handlers.user_cache_handler import setup_user_cache_handler  # 新增：导入用户缓存处理器
+from handlers.user_cache_handler import (
+    setup_user_cache_handler,
+)  # 新增：导入用户缓存处理器
 from utils.command_factory import command_factory
 from utils.error_handling import with_error_handling
 from utils.log_manager import schedule_log_maintenance
@@ -127,9 +135,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
                 chat_id=update.effective_chat.id,
                 text="❌ 处理请求时发生错误，请稍后重试。\n如果问题持续存在，请联系管理员。",
                 delay=config.auto_delete_delay,
-                command_message_id=update.effective_message.message_id
-                if hasattr(update.effective_message, "message_id")
-                else None,
+                command_message_id=(
+                    update.effective_message.message_id
+                    if hasattr(update.effective_message, "message_id")
+                    else None
+                ),
             )
         except Exception as e:
             logger.error(f"发送错误消息失败: {e}")  # 记录失败原因而不是静默忽略
@@ -188,7 +198,10 @@ async def setup_application(application: Application, config) -> None:
 
     # 初始化 Redis 缓存管理器
     cache_manager = RedisCacheManager(
-        host=config.redis_host, port=config.redis_port, password=config.redis_password, db=config.redis_db
+        host=config.redis_host,
+        port=config.redis_port,
+        password=config.redis_password,
+        db=config.redis_db,
     )
     await cache_manager.connect()
 
@@ -212,6 +225,16 @@ async def setup_application(application: Application, config) -> None:
     from utils.http_client import get_http_client
 
     httpx_client = get_http_client()
+
+    # 初始化 Pyrogram 客户端（用于获取高级用户信息）
+    from utils.pyrogram_client import initialize_pyrogram_client
+
+    pyrogram_initialized = await initialize_pyrogram_client(cache_manager.redis_client)
+    if pyrogram_initialized:
+        logger.info("✅ Pyrogram 客户端已从会话恢复")
+    else:
+        logger.warning("⚠️ Pyrogram 未配置或未登录")
+        logger.warning("提示：请通过 /admin 面板配置 Pyrogram 以启用高级功能（如查询用户注册日期）")
 
     # 将核心组件存储到 bot_data 中
     application.bot_data["cache_manager"] = cache_manager
@@ -258,31 +281,41 @@ async def setup_application(application: Application, config) -> None:
     logger.info(f" 任务管理器已初始化，最大任务数: {task_manager.max_tasks}")
 
     # 初始化 Redis 定时任务调度器
-    task_scheduler = redis_init_task_scheduler(cache_manager, cache_manager.redis_client)
+    task_scheduler = redis_init_task_scheduler(
+        cache_manager, cache_manager.redis_client
+    )
     task_scheduler.set_rate_converter(rate_converter)  # 设置汇率转换器
     application.bot_data["task_scheduler"] = task_scheduler
 
     # 根据配置添加定时清理任务
     cleanup_tasks_added = 0
     if config.spotify_weekly_cleanup:
-        await task_scheduler.add_weekly_cache_cleanup("spotify", "spotify", weekday=6, hour=5, minute=0)
+        await task_scheduler.add_weekly_cache_cleanup(
+            "spotify", "spotify", weekday=6, hour=5, minute=0
+        )
         logger.info(" 已配置 Spotify 每周日UTC 5:00 定时清理")
         cleanup_tasks_added += 1
 
     if config.disney_weekly_cleanup:
-        await task_scheduler.add_weekly_cache_cleanup("disney_plus", "disney_plus", weekday=6, hour=5, minute=0)
+        await task_scheduler.add_weekly_cache_cleanup(
+            "disney_plus", "disney_plus", weekday=6, hour=5, minute=0
+        )
         logger.info(" 已配置 Disney+ 每周日UTC 5:00 定时清理")
         cleanup_tasks_added += 1
 
     if config.max_weekly_cleanup:
-        await task_scheduler.add_weekly_cache_cleanup("max", "max", weekday=6, hour=5, minute=0)
+        await task_scheduler.add_weekly_cache_cleanup(
+            "max", "max", weekday=6, hour=5, minute=0
+        )
         logger.info(" 已配置 HBO Max 每周日UTC 5:00 定时清理")
         cleanup_tasks_added += 1
 
     # 启动任务调度器（包含汇率刷新任务）
     task_scheduler.start()
     if cleanup_tasks_added > 0:
-        logger.info(f" 定时任务调度器已启动，活动任务: {cleanup_tasks_added + 1} 个（含汇率刷新）")
+        logger.info(
+            f" 定时任务调度器已启动，活动任务: {cleanup_tasks_added + 1} 个（含汇率刷新）"
+        )
     else:
         logger.info(" 定时任务调度器已启动，仅汇率刷新任务")
 
@@ -342,7 +375,10 @@ async def setup_application(application: Application, config) -> None:
     all_commands["admin"] = "打开管理员面板"
 
     # 创建机器人命令列表
-    bot_commands = [BotCommand(command, description) for command, description in all_commands.items()]
+    bot_commands = [
+        BotCommand(command, description)
+        for command, description in all_commands.items()
+    ]
 
     try:
         await application.bot.set_my_commands(bot_commands)
@@ -396,6 +432,13 @@ async def cleanup_application(application: Application) -> None:
         # ========================================
         # 第一步：关闭网络连接
         # ========================================
+        # 停止 Pyrogram 客户端
+        from utils.pyrogram_client import stop_pyrogram_client
+
+        await stop_pyrogram_client()
+        logger.info("✅ Pyrogram 客户端已停止")
+
+        # 关闭 httpx 客户端
         from utils.http_client import close_global_client
 
         await close_global_client()
@@ -469,7 +512,9 @@ def main() -> None:
         logger.error("❌ 数据库配置不完整，请检查 DB_HOST, DB_USER, DB_NAME")
         return
 
-    logger.info(f"✅ 数据库配置: {config.db_user}@{config.db_host}:{config.db_port}/{config.db_name}")
+    logger.info(
+        f"✅ 数据库配置: {config.db_user}@{config.db_host}:{config.db_port}/{config.db_name}"
+    )
 
     # 验证 Redis 配置
     logger.info(f"✅ Redis 配置: {config.redis_host}:{config.redis_port}")
