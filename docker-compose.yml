@@ -30,7 +30,7 @@ services:
   
   # 服务名称，可以自定义，这里我们叫它 appbot。
   appbot:
-    image: domomido/appbot:latest
+    build: .
 
     # --- 容器配置 ---
     # 给容器一个固定的名字，方便管理。

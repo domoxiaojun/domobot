@@ -234,7 +234,9 @@ async def setup_application(application: Application, config) -> None:
         logger.info("✅ Pyrogram 客户端已从会话恢复")
     else:
         logger.warning("⚠️ Pyrogram 未配置或未登录")
-        logger.warning("提示：请通过 /admin 面板配置 Pyrogram 以启用高级功能（如查询用户注册日期）")
+        logger.warning(
+            "提示：请通过 /admin 面板配置 Pyrogram 以启用高级功能（如查询用户注册日期）"
+        )
 
     # 将核心组件存储到 bot_data 中
     application.bot_data["cache_manager"] = cache_manager

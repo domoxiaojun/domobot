@@ -23,3 +23,9 @@ sessions/
 
 # 注册样本数据 (用户隐私数据)
 database/registration_samples.json
+
+# 文件目录
+backup/
+.claude/
+data/
+logs/
