@@ -17,6 +17,78 @@ from utils.permissions import Permission
 from utils.price_parser import extract_price_value_from_country_info
 
 
+def normalize_pricing_text(price_text: str) -> str:
+    """Normalize pricing text to Chinese for consistent display."""
+    # First check for free pricing terms in different languages
+    free_terms = [
+        "ücretsiz",  # Turkish
+        "free",  # English
+        "gratis",  # Spanish/Portuguese
+        "gratuit",  # French
+        "kostenlos",  # German
+        "無料",  # Japanese
+        "무료",  # Korean
+        "免费",  # Chinese Simplified
+        "免費",  # Chinese Traditional
+        "مجاني",  # Arabic
+        "gratuito",  # Italian
+        "бесплатно",  # Russian
+    ]
+
+    price_lower = price_text.lower().strip()
+    for term in free_terms:
+        if term.lower() in price_lower:
+            return "免费"
+
+    # Normalize subscription periods to Chinese
+    normalized_text = price_text
+
+    # Remove duplicate period indicators (e.g., "/monthper month", "/maandper maand")
+    normalized_text = re.sub(r'/month\s*per month', '/month', normalized_text, flags=re.IGNORECASE)
+    normalized_text = re.sub(r'per month\s*/month', 'per month', normalized_text, flags=re.IGNORECASE)
+    normalized_text = re.sub(r'/maand\s*per maand', '/maand', normalized_text, flags=re.IGNORECASE)
+    normalized_text = re.sub(r'per maand\s*/maand', 'per maand', normalized_text, flags=re.IGNORECASE)
+    normalized_text = re.sub(r'/jaar\s*per jaar', '/jaar', normalized_text, flags=re.IGNORECASE)
+    normalized_text = re.sub(r'per jaar\s*/jaar', 'per jaar', normalized_text, flags=re.IGNORECASE)
+
+    # Replace various period indicators with Chinese equivalents
+    period_replacements = [
+        # Monthly patterns
+        (r'/month', '每月'),
+        (r'per month', '每月'),
+        (r'\bmonth\b', '每月'),
+        (r'\bayda\b', '每月'),  # Turkish
+        (r'月額', '每月'),  # Japanese
+        (r'월', '每월'),  # Korean
+        (r'/mes', '每月'),  # Spanish
+        (r'par mois', '每月'),  # French
+        (r'pro Monat', '每月'),  # German
+        (r'/maand', '每月'),  # Dutch
+        (r'per maand', '每月'),  # Dutch
+
+        # Yearly patterns
+        (r'/year', '每年'),
+        (r'per year', '每年'),
+        (r'\byear\b', '每年'),
+        (r'yıllık', '每年'),  # Turkish
+        (r'年額', '每年'),  # Japanese
+        (r'연', '每年'),  # Korean
+        (r'/año', '每年'),  # Spanish
+        (r'par an', '每年'),  # French
+        (r'pro Jahr', '每年'),  # German
+        (r'/jaar', '每年'),  # Dutch
+        (r'per jaar', '每年'),  # Dutch
+    ]
+
+    for pattern, replacement in period_replacements:
+        normalized_text = re.sub(pattern, replacement, normalized_text, flags=re.IGNORECASE)
+
+    # Clean up extra whitespace
+    normalized_text = re.sub(r'\s+', ' ', normalized_text).strip()
+
+    return normalized_text
+
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -79,54 +151,167 @@ def get_icloud_prices_from_html(content: str) -> dict:
     for p in paragraphs:
         text = p.get_text(strip=True)
 
-        # Check if it's a country line
-        if ("（" in text and "）" in text) or text.endswith("（港元）"):
-            if current_country:
+        # Check if it's a country line - handle both Chinese format and potential HTML tags like <sup>
+        # Pattern: "国家名<sup>footnote</sup>（货币名称）" or "国家名（货币名称）"
+        if "（" in text and "）" in text and not p.find("b"):  # Country line should not have <b> tags
+            if current_country and size_price_dict:
                 prices[current_country] = {"currency": currency, "prices": size_price_dict}
 
-            # Process country info
-            if text.endswith("（港元）"):
-                current_country = "香港"
-                currency = "港元"
+            # Remove HTML tags like <sup> from country name
+            clean_text = re.sub(r'<[^>]+>', '', text)
+
+            # Extract country and currency from format like "俄罗斯（俄罗斯卢布）"
+            country_match = re.match(r"^(.*?)（(.*?)）", clean_text)
+            if country_match:
+                current_country = country_match.group(1).strip()
+                currency = country_match.group(2).strip()
                 size_price_dict = {}
-            elif "（" in text and "）" in text:
-                country_match = re.match(r"^(.*?)（(.*?)）", text)
-                if country_match:
-                    current_country = country_match.group(1)
-                    currency = country_match.group(2)
-                    size_price_dict = {}
+                logger.info(f"Found country: {current_country}, currency: {currency}")
 
-        # Check if it's a price line
-        else:
-            # Find size and price
-            size = p.find("b")
-            if size:
-                # Get full size text
-                size_text = size.get_text(strip=True)
-                # Remove colons (full-width and half-width)
-                size_text = size_text.replace("：", "").replace(":", "").strip()
+        # Check if it's a price line - must have <b> tag for storage size and be under a country
+        elif current_country:
+            size_elem = p.find("b")
+            if size_elem:
+                # Get storage size
+                size_text = size_elem.get_text(strip=True)
 
-                # Get full price text
-                price_text = text
-                if "：" in price_text:
-                    price = price_text.split("：")[-1].strip()
-                elif ":" in price_text:
-                    price = price_text.split(":")[-1].strip()
+                # Extract price after the Chinese colon "："
+                if "：" in text:
+                    price = text.split("：", 1)[1].strip()
+                elif ":" in text:
+                    price = text.split(":", 1)[1].strip()
                 else:
-                    # If no colon, extract number part
-                    match = re.search(r"HK\$\s*(\d+)", price_text)
-                    if match:
-                        price = f"HK$ {match.group(1)}"
+                    # Fallback: try to extract everything after the bold part
+                    full_text = p.get_text(strip=True)
+                    bold_text = size_elem.get_text(strip=True)
+                    if bold_text in full_text:
+                        price = full_text.replace(bold_text, "").strip()
+                        # Remove leading colon if present
+                        price = re.sub(r"^[：:]\s*", "", price).strip()
                     else:
                         continue
 
-                size_price_dict[size_text] = price
+                if price and size_text:
+                    size_price_dict[size_text] = price
+                    logger.debug(f"Added price for {current_country}: {size_text} = {price}")
 
     # Save data for the last country
-    if current_country:
+    if current_country and size_price_dict:
         prices[current_country] = {"currency": currency, "prices": size_price_dict}
+        logger.info(f"Completed parsing for {current_country} with {len(size_price_dict)} storage tiers")
 
+    logger.info(f"Total countries parsed from Apple Support HTML: {len(prices)}")
     return prices
+
+
+def get_icloud_prices_from_apple_website(content: str, country_code: str) -> dict:
+    """Extracts iCloud prices from Apple website HTML content (e.g., apple.com/tr/icloud/)."""
+    soup = BeautifulSoup(content, "html.parser")
+    country_info = SUPPORTED_COUNTRIES.get(country_code, {})
+    country_name = country_info.get("name", country_code)
+    currency = country_info.get("currency", "")
+
+    logger.info(f"Parsing iCloud prices for {country_name} ({country_code}), currency: {currency}")
+
+    size_price_dict = {}
+
+    # Method 1: Comparison table pricing (most comprehensive - includes all plans)
+    plan_items = soup.find_all("div", class_="plan-list-item")
+    logger.info(f"Found {len(plan_items)} plan items in comparison table")
+
+    for item in plan_items:
+        cost_elem = item.find("p", class_="typography-compare-body plan-type cost")
+        if cost_elem:
+            aria_label = cost_elem.get("aria-label", "")
+            price_text = cost_elem.get_text(strip=True)
+
+            logger.debug(f"Processing item: aria-label='{aria_label}', price_text='{price_text}'")
+
+            # Extract capacity from aria-label
+            capacity_match = re.search(r"(\d+\s*(?:GB|TB))", aria_label)
+            if capacity_match:
+                capacity = capacity_match.group(1).replace(" ", "")
+                # Handle both paid plans (with currency) and free plans
+                # Check for common currency patterns or free terms
+                is_valid_price = (
+                    # Free terms in various languages
+                        "ücretsiz" in price_text.lower() or "free" in price_text.lower() or
+                        "gratis" in price_text.lower() or "gratuit" in price_text.lower() or
+                        "kostenlos" in price_text.lower() or "免费" in price_text or
+                        # Currency patterns
+                        re.search(
+                            r'[\d.,]+\s*(?:TL|RM|USD|\$|EUR|€|£|¥|₹|₩|₦|R\$|C\$|A\$|NZ\$|HK\$|S\$|₱|₪|₨|kr|₽|zł|Kč|Ft)',
+                            price_text) or
+                        # Month/year patterns (subscription pricing)
+                        "/month" in price_text or "per month" in price_text or
+                        "/year" in price_text or "per year" in price_text or
+                        "ayda" in price_text.lower() or "月" in price_text or
+                        "/maand" in price_text.lower() or "per maand" in price_text.lower() or  # Dutch
+                        "/jaar" in price_text.lower() or "per jaar" in price_text.lower()  # Dutch
+                )
+
+                if is_valid_price:
+                    size_price_dict[capacity] = price_text
+                    logger.info(f"Added plan: {capacity} = {price_text}")
+                else:
+                    logger.debug(f"Skipped plan {capacity}: price '{price_text}' doesn't match pricing criteria")
+            else:
+                logger.debug(f"No capacity match in aria-label: '{aria_label}'")
+
+    # Method 2: Accordion structure (fallback)
+    if not size_price_dict:
+        accordion_buttons = soup.find_all("button")
+        for button in accordion_buttons:
+            if "data-accordion-item" in button.attrs or "accordion" in " ".join(button.get("class", [])):
+                capacity_elem = button.find("span", class_="plan-capacity")
+                price_span = None
+
+                # Find price span (role="text")
+                for span in button.find_all("span"):
+                    span_text = span.get_text(strip=True)
+                    if span.get("role") == "text":
+                        # Check for valid pricing patterns
+                        is_valid_price = (
+                                "ücretsiz" in span_text.lower() or "free" in span_text.lower() or
+                                "gratis" in span_text.lower() or "gratuit" in span_text.lower() or
+                                "kostenlos" in span_text.lower() or "免费" in span_text or
+                                re.search(
+                                    r'[\d.,]+\s*(?:TL|RM|USD|\$|EUR|€|£|¥|₹|₩|₦|R\$|C\$|A\$|NZ\$|HK\$|S\$|₱|₪|₨|kr|₽|zł|Kč|Ft)',
+                                    span_text) or
+                                "/month" in span_text or "per month" in span_text or
+                                "/year" in span_text or "per year" in span_text or
+                                "ayda" in span_text.lower() or "月" in span_text or
+                                "/maand" in span_text.lower() or "per maand" in span_text.lower() or  # Dutch
+                                "/jaar" in span_text.lower() or "per jaar" in span_text.lower()  # Dutch
+                        )
+                        if is_valid_price:
+                            price_span = span
+                            break
+
+                if capacity_elem and price_span:
+                    capacity = capacity_elem.get_text(strip=True).replace(" ", "")
+                    price = price_span.get_text(strip=True)
+                    size_price_dict[capacity] = price
+
+    # Method 3: Hero section pricing (fallback for basic plans)
+    if not size_price_dict:
+        price_elements = soup.find_all("p", class_="typography-hero-compare-price")
+        plan_elements = soup.find_all("h3", class_="typography-hero-compare-plan")
+
+        if price_elements and plan_elements and len(price_elements) == len(plan_elements):
+            for price_elem, plan_elem in zip(price_elements, plan_elements):
+                price_text = price_elem.get_text(strip=True)
+                plan_text = plan_elem.get_text(strip=True).replace(" ", "")
+
+                if price_text and plan_text:
+                    size_price_dict[plan_text] = price_text
+
+    if size_price_dict:
+        logger.info(f"Successfully parsed {len(size_price_dict)} iCloud plans for {country_name}")
+        return {country_name: {"currency": currency, "prices": size_price_dict}}
+    else:
+        logger.warning(f"No iCloud pricing data found for {country_name} using Apple website parser")
+        return {}
 
 
 async def get_service_info(url: str, country_code: str, service: str, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -156,21 +341,57 @@ async def get_service_info(url: str, country_code: str, service: str, context: C
 
         client = get_http_client()
         response = await client.get(url, timeout=15)
+        content = None
 
         if response.status_code == 404:
             logger.info(f"{service} not available in {country_code} (404).")
-            return f"📍 国家/地区: {flag_emoji} {country_info['name']}\n{service_display_name} 服务在该国家/地区不可用。"
+            # For iCloud, try fallback to Apple Support page
+            if service == "icloud":
+                logger.info(f"Attempting iCloud fallback to Apple Support page for {country_code}")
+                support_url = "https://support.apple.com/zh-cn/108047"
+                try:
+                    fallback_response = await client.get(support_url, timeout=15)
+                    if fallback_response.status_code == 200:
+                        content = fallback_response.text
+                        url = support_url  # Update URL to reflect we're using support page
+                        logger.info(f"Successfully fetched fallback URL: {support_url}")
+                        # Continue with parsing using the support page content
+                    else:
+                        return f"📍 国家/地区: {flag_emoji} {country_info['name']}\n{service_display_name} 服务在该国家/地区不可用。"
+                except Exception as fallback_error:
+                    logger.error(f"Fallback request failed: {fallback_error}")
+                    return f"📍 国家/地区: {flag_emoji} {country_info['name']}\n{service_display_name} 服务在该国家/地区不可用。"
+            else:
+                return f"📍 国家/地区: {flag_emoji} {country_info['name']}\n{service_display_name} 服务在该国家/地区不可用。"
+        else:
+            response.raise_for_status()
+            content = response.text
+            logger.info(f"Successfully fetched URL: {url}")
 
-        response.raise_for_status()
-        content = response.text
-        logger.info(f"Successfully fetched URL: {url}")
+        if content is None:
+            return f"📍 国家/地区: {flag_emoji} {country_info['name']}\n{service_display_name} 服务在该国家/地区不可用。"
 
     except httpx.HTTPStatusError as e:
         logger.error(f"Network error for {url}: {e}")
         if e.response.status_code == 404:
-            return (
-                f"📍 国家/地区: {flag_emoji} {country_info['name']}\n{service_display_name} 服务在该国家/地区不可用。"
-            )
+            # For iCloud, try fallback to Apple Support page
+            if service == "icloud":
+                logger.info(f"Attempting iCloud fallback to Apple Support page for {country_code} (HTTPStatusError)")
+                support_url = "https://support.apple.com/zh-cn/108047"
+                try:
+                    fallback_response = await client.get(support_url, timeout=15)
+                    if fallback_response.status_code == 200:
+                        content = fallback_response.text
+                        url = support_url  # Update URL to reflect we're using support page
+                        logger.info(f"Successfully fetched fallback URL: {support_url}")
+                        # Continue with parsing using the support page content
+                    else:
+                        return f"📍 国家/地区: {flag_emoji} {country_info['name']}\n{service_display_name} 服务在该国家/地区不可用。"
+                except Exception as fallback_error:
+                    logger.error(f"Fallback request failed: {fallback_error}")
+                    return f"📍 国家/地区: {flag_emoji} {country_info['name']}\n{service_display_name} 服务在该国家/地区不可用。"
+            else:
+                return f"📍 国家/地区: {flag_emoji} {country_info['name']}\n{service_display_name} 服务在该国家/地区不可用。"
         return f"📍 国家/地区: {flag_emoji} {country_info['name']}\n获取价格信息失败: 网络错误或请求超时 (HTTP {e.response.status_code})。"
     except httpx.RequestError as e:
         logger.error(f"Unexpected error fetching {url}: {e}")
@@ -186,25 +407,100 @@ async def get_service_info(url: str, country_code: str, service: str, context: C
         )
 
         if service == "icloud":
-            prices = get_icloud_prices_from_html(content)
+            # Try to parse as Apple website first (for country-specific URLs)
+            prices = get_icloud_prices_from_apple_website(content, country_code)
+
+            # Fallback to legacy Apple Support page format if no prices found
+            if not prices:
+                prices = get_icloud_prices_from_html(content)
+
+            # If still no prices and we're not already using Apple Support, try fallback
+            if not prices and "support.apple.com" not in url:
+                logger.info(f"No prices found, attempting Apple Support fallback for {country_code}")
+                try:
+                    support_url = "https://support.apple.com/zh-cn/108047"
+                    support_response = await client.get(support_url, timeout=15)
+                    if support_response.status_code == 200:
+                        support_content = support_response.text
+                        logger.info(f"Successfully fetched Apple Support fallback page")
+                        prices = get_icloud_prices_from_html(support_content)
+                        if prices:
+                            logger.info(f"Successfully parsed {len(prices)} countries from Apple Support page")
+                except Exception as support_error:
+                    logger.error(f"Apple Support fallback failed: {support_error}")
+
             country_name = country_info["name"]
 
+            # Find matching country data
             matched_country = None
             for name in prices.keys():
-                if country_name in name or name in country_name:
+                # Remove footnote numbers and superscript for better matching
+                clean_name = re.sub(r'[0-9,\s]+$', '', name).strip()
+                # Use exact matching first, then fallback to substring matching
+                if (country_name == clean_name or
+                        clean_name == country_name):
                     matched_country = name
+                    logger.info(f"Exact matched country: '{country_name}' -> '{name}'")
+                    break
+                elif (country_name in name and
+                      len(country_name) > 2 and  # Avoid short matches like "美" matching "美国"
+                      not any(other_clean for other_clean in [re.sub(r'[0-9,\s]+$', '', other_name).strip()
+                                                              for other_name in prices.keys()
+                                                              if other_name != name]
+                              if country_name in other_clean and other_clean != clean_name)):
+                    matched_country = name
+                    logger.info(f"Substring matched country: '{country_name}' -> '{name}'")
                     break
 
             if not matched_country:
-                result_lines.append(f"{service_display_name} 服务在该国家/地区不可用。")
+                # Final fallback: try Apple Support page if we haven't already
+                if "support.apple.com" not in url:
+                    logger.info(f"Final fallback attempt: fetching Apple Support page for {country_code}")
+                    try:
+                        support_url = "https://support.apple.com/zh-cn/108047"
+                        support_response = await client.get(support_url, timeout=15)
+                        if support_response.status_code == 200:
+                            support_content = support_response.text
+                            support_prices = get_icloud_prices_from_html(support_content)
+                            if support_prices:
+                                logger.info(f"Successfully got fallback data from Apple Support page")
+                                prices = support_prices
+                                # Re-check for matching country
+                                for name in prices.keys():
+                                    clean_name = re.sub(r'[0-9,\s]+$', '', name).strip()
+                                    # Use exact matching first
+                                    if (country_name == clean_name or
+                                            clean_name == country_name):
+                                        matched_country = name
+                                        logger.info(f"Fallback exact matched country: '{country_name}' -> '{name}'")
+                                        break
+                                    elif (country_name in name and
+                                          len(country_name) > 2 and
+                                          not any(other_clean for other_clean in
+                                                  [re.sub(r'[0-9,\s]+$', '', other_name).strip()
+                                                   for other_name in prices.keys()
+                                                   if other_name != name]
+                                                  if country_name in other_clean and other_clean != clean_name)):
+                                        matched_country = name
+                                        logger.info(f"Fallback substring matched country: '{country_name}' -> '{name}'")
+                                        break
+                    except Exception as support_error:
+                        logger.error(f"Final fallback failed: {support_error}")
+
+                if not matched_country:
+                    result_lines.append(f"{service_display_name} 服务在该国家/地区不可用。")
             else:
-                size_order = ["50GB", "200GB", "2TB", "6TB", "12TB"]
+                size_order = ["5GB", "50GB", "200GB", "2TB", "6TB", "12TB"]
                 country_prices = prices[matched_country]["prices"]
                 for size in size_order:
                     if size in country_prices:
                         price = country_prices[size]
-                        line = f"{size}: {price}"
-                        if country_code != "CN":
+                        # Normalize pricing text to Chinese for consistent display
+                        normalized_price = normalize_pricing_text(price)
+                        line = f"{size}: {normalized_price}"
+
+                        # Don't convert free plans or CNY prices
+                        if country_code != "CN" and normalized_price != "免费":
                             cny_price_str = await convert_price_to_cny(price, country_code, context)
                             line += cny_price_str
                         result_lines.append(line)
@@ -269,96 +565,180 @@ async def get_service_info(url: str, country_code: str, service: str, context: C
                 result_lines.append(f"{service_display_name} 服务在该国家/地区不可用。")
             elif country_code == "CN":
                 logger.info("Applying CN-specific parsing for Apple Music.")
-                student_plan_item = plans_section.select_one("div.plan-list-item.student")
-                if student_plan_item and isinstance(student_plan_item, Tag):
-                    plan_name_tag = student_plan_item.select_one("p.plan-type:not(.cost)")
-                    price_tag = student_plan_item.select_one("p.cost")
-                    if plan_name_tag and price_tag:
-                        plan_name = plan_name_tag.get_text(strip=True).replace("4", "").strip()
-                        price_str = price_tag.get_text(strip=True)
-                        result_lines.append(f"• 学生计划: {price_str}")
 
-                individual_plan_item = plans_section.select_one("div.plan-list-item.individual")
-                if individual_plan_item and isinstance(individual_plan_item, Tag):
-                    plan_name_tag = individual_plan_item.select_one("p.plan-type:not(.cost)")
-                    price_tag = individual_plan_item.select_one("p.cost")
-                    if plan_name_tag and price_tag:
-                        plan_name = plan_name_tag.get_text(strip=True)
-                        price_str = price_tag.get_text(strip=True)
-                        result_lines.append(f"• 个人计划: {price_str}")
+                # Try new gallery-based structure first (2024+ layout)
+                gallery_items = plans_section.select("li.gallery-item")
+                parsed_any = False
 
-                family_plan_item = plans_section.select_one("div.plan-list-item.family")
-                if family_plan_item and isinstance(family_plan_item, Tag):
-                    plan_name_tag = family_plan_item.select_one("p.plan-type:not(.cost)")
-                    price_tag = family_plan_item.select_one("p.cost")
-                    if plan_name_tag and price_tag:
-                        plan_name = plan_name_tag.get_text(strip=True).replace("5", "").strip()
-                        price_str = price_tag.get_text(strip=True)
-                        result_lines.append(f"• 家庭计划: {price_str}")
+                if gallery_items:
+                    logger.info(f"Found {len(gallery_items)} gallery items (new layout)")
+                    # Extract student price from FAQ if available
+                    student_price = None
+                    faq_section = soup.find("section", class_="section-faq")
+                    if faq_section:
+                        faq_text = faq_section.get_text()
+                        student_match = re.search(r'学生.*?每月仅需\s*(RMB\s*\d+)', faq_text)
+                        if student_match:
+                            student_price = student_match.group(1)
+                            result_lines.append(f"• 学生计划: {student_price}/月")
+                            parsed_any = True
+
+                    # Parse gallery items for individual and family plans
+                    for item in gallery_items:
+                        plan_name_elem = item.select_one("h3.tile-eyebrow")
+                        price_elem = item.select_one("p.tile-headline")
+
+                        if plan_name_elem and price_elem:
+                            plan_name = plan_name_elem.get_text(strip=True)
+                            price_text = price_elem.get_text(strip=True)
+                            # Extract price from "仅需 RMB 11/月" format
+                            price_match = re.search(r'(RMB\s*\d+)/月', price_text)
+                            if price_match:
+                                price_str = f"{price_match.group(1)}/月"
+                                result_lines.append(f"• {plan_name}计划: {price_str}")
+                                parsed_any = True
+
+                # Fallback to old structure if new layout didn't work
+                if not parsed_any:
+                    logger.info("Falling back to old plan-list-item structure")
+                    student_plan_item = plans_section.select_one("div.plan-list-item.student")
+                    if student_plan_item and isinstance(student_plan_item, Tag):
+                        plan_name_tag = student_plan_item.select_one("p.plan-type:not(.cost)")
+                        price_tag = student_plan_item.select_one("p.cost")
+                        if plan_name_tag and price_tag:
+                            plan_name = plan_name_tag.get_text(strip=True).replace("4", "").strip()
+                            price_str = price_tag.get_text(strip=True)
+                            result_lines.append(f"• 学生计划: {price_str}")
+
+                    individual_plan_item = plans_section.select_one("div.plan-list-item.individual")
+                    if individual_plan_item and isinstance(individual_plan_item, Tag):
+                        plan_name_tag = individual_plan_item.select_one("p.plan-type:not(.cost)")
+                        price_tag = individual_plan_item.select_one("p.cost")
+                        if plan_name_tag and price_tag:
+                            plan_name = plan_name_tag.get_text(strip=True)
+                            price_str = price_tag.get_text(strip=True)
+                            result_lines.append(f"• 个人计划: {price_str}")
+
+                    family_plan_item = plans_section.select_one("div.plan-list-item.family")
+                    if family_plan_item and isinstance(family_plan_item, Tag):
+                        plan_name_tag = family_plan_item.select_one("p.plan-type:not(.cost)")
+                        price_tag = family_plan_item.select_one("p.cost")
+                        if plan_name_tag and price_tag:
+                            plan_name = plan_name_tag.get_text(strip=True).replace("5", "").strip()
+                            price_str = price_tag.get_text(strip=True)
+                            result_lines.append(f"• 家庭计划: {price_str}")
             else:
                 logger.info(f"Applying standard parsing for Apple Music ({country_code}).")
-                plan_items = plans_section.select("div.plan-list-item")
-                plan_order = ["student", "individual", "family"]
-                processed_plans = set()
 
-                for plan_type in plan_order:
-                    item = plans_section.select_one(f"div.plan-list-item.{plan_type}")
-                    if item and isinstance(item, Tag) and plan_type not in processed_plans:
+                # Try new gallery-based structure first (2024+ layout)
+                gallery_items = plans_section.select("li.gallery-item")
+                parsed_any = False
+
+                if gallery_items:
+                    logger.info(f"Found {len(gallery_items)} gallery items for {country_code} (new layout)")
+
+                    # Map of plan IDs to Chinese names
+                    plan_name_map = {
+                        "student": "学生",
+                        "individual": "个人",
+                        "voice": "Voice",
+                        "family": "家庭"
+                    }
+
+                    for item in gallery_items:
+                        # Get plan ID from item's id attribute
+                        plan_id = item.get("id", "")
+                        plan_name_elem = item.select_one("h3.tile-eyebrow")
+                        price_elem = item.select_one("p.tile-headline")
+
+                        if plan_name_elem and price_elem:
+                            # Use mapped Chinese name if available, otherwise use extracted name
+                            plan_name = plan_name_map.get(plan_id, plan_name_elem.get_text(strip=True))
+                            price_text = price_elem.get_text(strip=True)
+
+                            # Extract the main price, handling various formats
+                            # Examples: "₹119/month", "月額1,080円。新規登録すると、最初の1か月間無料。"
+                            price_match = re.search(
+                                r'([¥₹$€£₩₦]\s*[\d,]+(?:\.\d+)?(?:/month|/年|/月)?|月額\s*[\d,]+円|[\d,]+(?:\.\d+)?\s*(?:TL|RM|USD|EUR|GBP|JPY|INR|KRW|NGN|BRL|CAD|AUD|NZD|HKD|SGD|PHP|ILS|PKR|kr|RUB|PLN|CZK|HUF)(?:/month|/mo)?)',
+                                price_text)
+
+                            if price_match:
+                                price_str = price_match.group(1).strip()
+                                # Clean up common suffixes
+                                price_str = re.sub(r'/month|/mo\.?|。.*$', '', price_str, flags=re.IGNORECASE).strip()
+
+                                line = f"• {plan_name}计划: {price_str}"
+                                if country_code != "CN":
+                                    cny_price_str = await convert_price_to_cny(price_str, country_code, context)
+                                    line += cny_price_str
+                                result_lines.append(line)
+                                parsed_any = True
+
+                # Fallback to old plan-list-item structure
+                if not parsed_any:
+                    logger.info(f"Falling back to old plan-list-item structure for {country_code}")
+                    plan_items = plans_section.select("div.plan-list-item")
+                    plan_order = ["student", "individual", "family"]
+                    processed_plans = set()
+
+                    for plan_type in plan_order:
+                        item = plans_section.select_one(f"div.plan-list-item.{plan_type}")
+                        if item and isinstance(item, Tag) and plan_type not in processed_plans:
+                            plan_name_tag = item.select_one("p.plan-type:not(.cost), h3, h4, .plan-title, .plan-name")
+                            plan_name_extracted = (
+                                plan_name_tag.get_text(strip=True).replace("プラン", "").strip()
+                                if plan_name_tag
+                                else plan_type.capitalize()
+                            )
+
+                            price_tag = item.select_one("p.cost span, p.cost, .price, .plan-price")
+                            if price_tag:
+                                price_str = price_tag.get_text(strip=True)
+                                price_str = re.sub(
+                                    r"\s*/\s*(月|month|mo\\.?).*", "", price_str, flags=re.IGNORECASE
+                                ).strip()
+
+                                if plan_type == "student":
+                                    plan_name = "学生"
+                                elif plan_type == "individual":
+                                    plan_name = "个人"
+                                elif plan_type == "family":
+                                    plan_name = "家庭"
+                                else:
+                                    plan_name = plan_name_extracted
+
+                                line = f"• {plan_name}计划: {price_str}"
+                                cny_price_str = await convert_price_to_cny(price_str, country_code, context)
+                                line += cny_price_str
+                                result_lines.append(line)
+                                processed_plans.add(plan_type)
+
+                    for item in plan_items:
+                        class_list = item.get("class", [])
+                        is_processed = False
+                        for p_plan in processed_plans:
+                            if p_plan in class_list:
+                                is_processed = True
+                                break
+                        if is_processed:
+                            continue
+
                         plan_name_tag = item.select_one("p.plan-type:not(.cost), h3, h4, .plan-title, .plan-name")
-                        plan_name_extracted = (
+                        plan_name = (
                             plan_name_tag.get_text(strip=True).replace("プラン", "").strip()
                             if plan_name_tag
-                            else plan_type.capitalize()
+                            else "未知计划"
                         )
 
                         price_tag = item.select_one("p.cost span, p.cost, .price, .plan-price")
                         if price_tag:
                             price_str = price_tag.get_text(strip=True)
-                            price_str = re.sub(
-                                r"\s*/\s*(月|month|mo\\.?).*", "", price_str, flags=re.IGNORECASE
-                            ).strip()
+                            price_str = re.sub(r"\s*/\s*(月|month).*", "", price_str, flags=re.IGNORECASE).strip()
 
-                            if plan_type == "student":
-                                plan_name = "学生"
-                            elif plan_type == "individual":
-                                plan_name = "个人"
-                            elif plan_type == "family":
-                                plan_name = "家庭"
-                            else:
-                                plan_name = plan_name_extracted
-
-                            line = f"• {plan_name}计划: {price_str}"
+                            line = f"• {plan_name}: {price_str}"
                             cny_price_str = await convert_price_to_cny(price_str, country_code, context)
                             line += cny_price_str
                             result_lines.append(line)
-                            processed_plans.add(plan_type)
-
-                for item in plan_items:
-                    class_list = item.get("class", [])
-                    is_processed = False
-                    for p_plan in processed_plans:
-                        if p_plan in class_list:
-                            is_processed = True
-                            break
-                    if is_processed:
-                        continue
-
-                    plan_name_tag = item.select_one("p.plan-type:not(.cost), h3, h4, .plan-title, .plan-name")
-                    plan_name = (
-                        plan_name_tag.get_text(strip=True).replace("プラン", "").strip()
-                        if plan_name_tag
-                        else "未知计划"
-                    )
-
-                    price_tag = item.select_one("p.cost span, p.cost, .price, .plan-price")
-                    if price_tag:
-                        price_str = price_tag.get_text(strip=True)
-                        price_str = re.sub(r"\s*/\s*(月|month).*", "", price_str, flags=re.IGNORECASE).strip()
-
-                        line = f"• {plan_name}: {price_str}"
-                        cny_price_str = await convert_price_to_cny(price_str, country_code, context)
-                        line += cny_price_str
-                        result_lines.append(line)
 
         # Only join if there are actual price details beyond the header
         if len(result_lines) > 1:
@@ -395,7 +775,8 @@ async def apple_services_command(update: Update, context: ContextTypes.DEFAULT_T
             "`/aps appleone 中国 美国` - 支持中文国家名称\n\n"
             "💡 不指定国家时使用默认地区：中国、尼日利亚、土耳其、日本、印度、马来西亚"
         )
-        await send_help(context, update.effective_chat.id, foldable_text_with_markdown_v2(help_message), parse_mode="MarkdownV2")
+        await send_help(context, update.effective_chat.id, foldable_text_with_markdown_v2(help_message),
+                        parse_mode="MarkdownV2")
         await delete_user_command(context, update.effective_chat.id, update.message.message_id)
         return
 
@@ -410,20 +791,25 @@ async def apple_services_command(update: Update, context: ContextTypes.DEFAULT_T
             context.bot_data["cache_manager"].clear_cache(subdirectory="apple_services")
             cache_message = "Apple 服务价格缓存已清理。"
             await message.delete()
-            await send_success(context, update.effective_chat.id, foldable_text_v2(cache_message), parse_mode="MarkdownV2")
+            await send_success(context, update.effective_chat.id, foldable_text_v2(cache_message),
+                               parse_mode="MarkdownV2")
             return
         except Exception as e:
             logger.error(f"Error clearing Apple Services cache: {e}")
             error_message = f"清理缓存时发生错误: {e!s}"
             await message.delete()
-            await send_error(context, update.effective_chat.id, foldable_text_v2(error_message), parse_mode="MarkdownV2")
+            await send_error(context, update.effective_chat.id, foldable_text_v2(error_message),
+                             parse_mode="MarkdownV2")
+            await delete_user_command(context, update.effective_chat.id, update.message.message_id)
             return
 
     service = args[0].lower()
     if service not in ["icloud", "appleone", "applemusic"]:
         invalid_service_message = "无效的服务类型，请使用 iCloud, Apple One 或 AppleMusic"
         await message.delete()
-        await send_error(context, update.effective_chat.id, foldable_text_v2(invalid_service_message), parse_mode="MarkdownV2")
+        await send_error(context, update.effective_chat.id, foldable_text_v2(invalid_service_message),
+                         parse_mode="MarkdownV2")
+        await delete_user_command(context, update.effective_chat.id, update.message.message_id)
         return
 
     try:
@@ -441,8 +827,15 @@ async def apple_services_command(update: Update, context: ContextTypes.DEFAULT_T
         for country in countries:
             url = ""
             if service == "icloud":
-                # iCloud has a universal URL for all regions
-                url = "https://support.apple.com/zh-cn/108047"
+                if country == "US":
+                    # For US, use the base URL without country code
+                    url = "https://www.apple.com/icloud/"
+                elif country == "CN":
+                    # For China, use .cn domain
+                    url = "https://www.apple.com.cn/icloud/"
+                else:
+                    # For other countries, use country code format like Apple One
+                    url = f"https://www.apple.com/{country.lower()}/icloud/"
             elif country == "US":
                 # For US, use the base URL without country code
                 url = f"https://www.apple.com/{service}/"
@@ -483,7 +876,7 @@ async def apple_services_command(update: Update, context: ContextTypes.DEFAULT_T
         from utils.message_manager import _schedule_deletion
         config = get_config()
         await _schedule_deletion(context, update.effective_chat.id, message.message_id, config.auto_delete_delay)
-        
+
         # 删除用户命令
         await delete_user_command(context, update.effective_chat.id, update.message.message_id)
 
@@ -492,6 +885,7 @@ async def apple_services_command(update: Update, context: ContextTypes.DEFAULT_T
         error_message = f"查询失败: {e!s}"
         await message.delete()
         await send_error(context, update.effective_chat.id, foldable_text_v2(error_message), parse_mode="MarkdownV2")
+        await delete_user_command(context, update.effective_chat.id, update.message.message_id)
 
 
 async def apple_services_clean_cache_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -501,12 +895,15 @@ async def apple_services_clean_cache_command(update: Update, context: ContextTyp
     try:
         context.bot_data["cache_manager"].clear_cache(subdirectory="apple_services")
         success_message = "✅ Apple 服务价格缓存已清理。"
-        await send_success(context, update.effective_chat.id, foldable_text_v2(success_message), parse_mode="MarkdownV2")
+        await send_success(context, update.effective_chat.id, foldable_text_v2(success_message),
+                           parse_mode="MarkdownV2")
+        await delete_user_command(context, update.effective_chat.id, update.message.message_id)
         return
     except Exception as e:
         logger.error(f"Error clearing Apple Services cache: {e}")
         error_message = f"❌ 清理Apple Services缓存时发生错误: {e!s}"
         await send_error(context, update.effective_chat.id, foldable_text_v2(error_message), parse_mode="MarkdownV2")
+        await delete_user_command(context, update.effective_chat.id, update.message.message_id)
         return
 
 
@@ -517,6 +914,7 @@ command_factory.register_command(
     permission=Permission.USER,
     description="查询Apple服务价格 (iCloud, Apple One, Apple Music)",
 )
-command_factory.register_command(
-    "aps_cleancache", apple_services_clean_cache_command, permission=Permission.ADMIN, description="清理Apple服务缓存"
-)
+# 已迁移到统一缓存管理命令 /cleancache
+# command_factory.register_command(
+#     "aps_cleancache", apple_services_clean_cache_command, permission=Permission.ADMIN, description="清理Apple服务缓存"
+# )
