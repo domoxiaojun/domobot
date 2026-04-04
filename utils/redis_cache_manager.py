@@ -13,14 +13,19 @@ from redis.exceptions import RedisError
 
 from utils.config_manager import get_config
 
-
 logger = logging.getLogger(__name__)
 
 
 class RedisCacheManager:
     """Redis 缓存管理器，保持与文件缓存相同的接口"""
 
-    def __init__(self, host: str = "localhost", port: int = 6379, db: int = 0, password: str | None = None):
+    def __init__(
+        self,
+        host: str = "localhost",
+        port: int = 6379,
+        db: int = 0,
+        password: str | None = None,
+    ):
         """初始化 Redis 缓存管理器"""
         self.config = get_config()
 
@@ -67,30 +72,17 @@ class RedisCacheManager:
             return f"cache:{subdirectory}:{key}"
         return f"cache:{key}"
 
-    def _get_ttl_for_subdirectory(self, subdirectory: str | None, key: str | None = None) -> int:
+    def _get_ttl_for_subdirectory(
+        self, subdirectory: str | None, key: str | None = None
+    ) -> int:
         """根据子目录获取对应的 TTL"""
-        ttl_mapping = {
-            "exchange_rates": self.config.rate_cache_duration,
-            "app_store": self.config.app_store_cache_duration,
-            "apple_services": self.config.apple_services_cache_duration,
-            "google_play": self.config.google_play_app_cache_duration,
-            "steam": self.config.steam_cache_duration,
-            "netflix": self.config.netflix_cache_duration,
-            "spotify": self.config.spotify_cache_duration,  # 8天，配合周日清理
-            "disney_plus": self.config.disney_cache_duration,  # 8天，配合周日清理
-            "max": self.config.max_cache_duration,  # 8天，配合周日清理
-        }
-
-        # 对于搜索结果特殊处理
-        if subdirectory == "google_play" and key and "search_" in key:
-            return self.config.google_play_search_cache_duration
-        if subdirectory == "app_store" and key and "search_" in key:
-            return self.config.app_store_search_cache_duration
-
-        return ttl_mapping.get(subdirectory, self.config.default_cache_duration)
+        return self.config.default_cache_duration
 
     async def load_cache(
-        self, key: str, max_age_seconds: int | None = None, subdirectory: str | None = None
+        self,
+        key: str,
+        max_age_seconds: int | None = None,
+        subdirectory: str | None = None,
     ) -> dict | None:
         """
         加载缓存数据，保持与 CacheManager 相同的接口
@@ -119,13 +111,19 @@ class RedisCacheManager:
             cache_data = json.loads(data)
 
             # 检查应用级过期时间（如果指定了 max_age_seconds）
-            if max_age_seconds is not None and isinstance(cache_data, dict) and "timestamp" in cache_data:
+            if (
+                max_age_seconds is not None
+                and isinstance(cache_data, dict)
+                and "timestamp" in cache_data
+            ):
                 cache_timestamp = cache_data["timestamp"]
                 current_time = time.time()
                 cache_age = current_time - cache_timestamp
 
                 if cache_age > max_age_seconds:
-                    logger.debug(f"缓存已过期 {cache_key}，缓存年龄: {cache_age:.1f}s > {max_age_seconds}s")
+                    logger.debug(
+                        f"缓存已过期 {cache_key}，缓存年龄: {cache_age:.1f}s > {max_age_seconds}s"
+                    )
                     # 删除过期的缓存
                     await self.redis_client.delete(cache_key)
                     return None
@@ -140,7 +138,13 @@ class RedisCacheManager:
             logger.error(f"加载缓存失败 {cache_key}: {e}")
             return None
 
-    async def save_cache(self, key: str, data: dict, subdirectory: str | None = None):
+    async def save_cache(
+        self,
+        key: str,
+        data: dict,
+        subdirectory: str | None = None,
+        ttl: int | None = None,
+    ):
         """
         保存数据到缓存，保持与 CacheManager 相同的接口
 
@@ -148,27 +152,38 @@ class RedisCacheManager:
             key: 缓存键
             data: 要缓存的数据
             subdirectory: 子目录
+            ttl: 过期时间（秒），如果未指定则使用默认配置
         """
         if not self._connected:
             logger.warning("Redis 未连接，无法保存缓存")
             return
 
         cache_key = self._get_cache_key(key, subdirectory)
-        ttl = self._get_ttl_for_subdirectory(subdirectory, key)
+
+        # 优先使用传递的 ttl，否则尝试查找默认配置
+        if ttl is None:
+            ttl = self._get_ttl_for_subdirectory(subdirectory, key)
 
         try:
             # 为了兼容性，保持数据格式
             cache_data = {"timestamp": time.time(), "data": data}
 
             # 保存到 Redis，设置过期时间
-            await self.redis_client.setex(cache_key, ttl, json.dumps(cache_data, ensure_ascii=False))
+            await self.redis_client.setex(
+                cache_key, ttl, json.dumps(cache_data, ensure_ascii=False)
+            )
 
             logger.debug(f"缓存已保存 {cache_key}，TTL: {ttl}秒")
 
         except (RedisError, json.JSONEncodeError) as e:
             logger.error(f"保存缓存失败 {cache_key}: {e}")
 
-    async def clear_cache(self, key: str | None = None, key_prefix: str | None = None, subdirectory: str | None = None):
+    async def clear_cache(
+        self,
+        key: str | None = None,
+        key_prefix: str | None = None,
+        subdirectory: str | None = None,
+    ):
         """
         清除缓存，保持与 CacheManager 相同的接口
 
@@ -186,22 +201,26 @@ class RedisCacheManager:
             if subdirectory and not key and not key_prefix:
                 pattern = f"cache:{subdirectory}:*"
                 await self._delete_by_pattern(pattern)
-                logger.info(f"已清除子目录缓存: {subdirectory}")
+                logger.debug(f"已清除子目录缓存: {subdirectory}")
 
             # 场景2：清除特定键
             elif key:
                 cache_key = self._get_cache_key(key, subdirectory)
                 result = await self.redis_client.delete(cache_key)
                 if result:
-                    logger.info(f"已清除缓存: {cache_key}")
+                    logger.debug(f"已清除缓存: {cache_key}")
                 else:
-                    logger.info(f"缓存不存在: {cache_key}")
+                    logger.debug(f"缓存不存在: {cache_key}")
 
             # 场景3：按前缀清除
             elif key_prefix:
-                pattern = f"cache:{subdirectory}:{key_prefix}*" if subdirectory else f"cache:{key_prefix}*"
+                pattern = (
+                    f"cache:{subdirectory}:{key_prefix}*"
+                    if subdirectory
+                    else f"cache:{key_prefix}*"
+                )
                 await self._delete_by_pattern(pattern)
-                logger.info(f"已清除前缀缓存: {pattern}")
+                logger.debug(f"已清除前缀缓存: {pattern}")
 
             # 场景4：清除所有缓存（根目录）
             elif not subdirectory:
@@ -213,21 +232,43 @@ class RedisCacheManager:
             logger.error(f"清除缓存失败: {e}")
 
     async def _delete_by_pattern(self, pattern: str):
-        """通过模式删除键"""
+        """通过模式删除键（性能优化：批量删除）"""
         cursor = 0
         deleted_count = 0
+        keys_to_delete = []
+        batch_size = 1000  # 批量删除阈值
+
+        # 使用更大的 count 提高扫描效率
+        scan_count = 500
+
         while True:
-            cursor, keys = await self.redis_client.scan(cursor, match=pattern, count=100)
+            cursor, keys = await self.redis_client.scan(
+                cursor, match=pattern, count=scan_count
+            )
             if keys:
-                deleted_count += len(keys)
-                await self.redis_client.delete(*keys)
-                logger.debug(f"删除了 {len(keys)} 个缓存键，匹配模式: {pattern}")
+                keys_to_delete.extend(keys)
+
+                # 当收集的键达到批量阈值时，执行批量删除
+                if len(keys_to_delete) >= batch_size:
+                    await self.redis_client.delete(*keys_to_delete)
+                    deleted_count += len(keys_to_delete)
+                    logger.debug(f"批量删除了 {len(keys_to_delete)} 个缓存键")
+                    keys_to_delete = []
+
             if cursor == 0:
                 break
 
-        logger.info(f"总共删除了 {deleted_count} 个缓存键，匹配模式: {pattern}")
+        # 删除剩余的键
+        if keys_to_delete:
+            await self.redis_client.delete(*keys_to_delete)
+            deleted_count += len(keys_to_delete)
+            logger.debug(f"删除了剩余 {len(keys_to_delete)} 个缓存键")
 
-    async def get_cache_timestamp(self, key: str, subdirectory: str | None = None) -> float | None:
+        logger.debug(f"总共删除了 {deleted_count} 个缓存键，匹配模式: {pattern}")
+
+    async def get_cache_timestamp(
+        self, key: str, subdirectory: str | None = None
+    ) -> float | None:
         """获取缓存的时间戳，保持兼容性"""
         if not self._connected:
             return None
@@ -249,37 +290,21 @@ class RedisCacheManager:
         await self.clear_cache()
 
     # 兼容性别名方法
-    async def get(self, key: str, max_age_seconds: int | None = None, subdirectory: str | None = None) -> dict | None:
+    async def get(
+        self,
+        key: str,
+        max_age_seconds: int | None = None,
+        subdirectory: str | None = None,
+    ) -> dict | None:
         """获取缓存数据（别名方法）"""
         return await self.load_cache(key, max_age_seconds, subdirectory)
 
-    async def set(self, key: str, data: dict, ttl: int | None = None, subdirectory: str | None = None):
+    async def set(
+        self,
+        key: str,
+        data: dict,
+        ttl: int | None = None,
+        subdirectory: str | None = None,
+    ):
         """设置缓存数据（别名方法）"""
         await self.save_cache(key, data, subdirectory)
-
-    # 同步包装方法（用于向后兼容）
-    def load_cache_sync(
-        self, key: str, max_age_seconds: int | None = None, subdirectory: str | None = None
-    ) -> dict | None:
-        """同步版本的 load_cache（仅用于兼容）"""
-        import asyncio
-
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        return loop.run_until_complete(self.load_cache(key, max_age_seconds, subdirectory))
-
-    def save_cache_sync(self, key: str, data: dict, subdirectory: str | None = None):
-        """同步版本的 save_cache（仅用于兼容）"""
-        import asyncio
-
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        loop.run_until_complete(self.save_cache(key, data, subdirectory))

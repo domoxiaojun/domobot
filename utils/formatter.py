@@ -5,7 +5,6 @@ from telegram.helpers import escape_markdown
 
 from .config_manager import get_config
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -42,7 +41,9 @@ def format_with_markdown_v2(text: str) -> str:
         for i, match in enumerate(reversed(matches)):
             placeholder = f"__CODE_BLOCK_{i}__"
             code_blocks.append((placeholder, match.group(0)))  # 保存整个代码块
-            result_text = result_text[: match.start()] + placeholder + result_text[match.end() :]
+            result_text = (
+                result_text[: match.start()] + placeholder + result_text[match.end() :]
+            )
 
         # 第二步：保护链接格式
         link_blocks = []
@@ -54,12 +55,17 @@ def format_with_markdown_v2(text: str) -> str:
             link_text = escape_v2(match.group(1))
             link_url = escape_v2(match.group(2))
             link_blocks.append((placeholder, f"[{link_text}]({link_url})"))
-            result_text = result_text[: match.start()] + placeholder + result_text[match.end() :]
+            result_text = (
+                result_text[: match.start()] + placeholder + result_text[match.end() :]
+            )
 
         # 第三步：处理其他格式标记（粗体、斜体、删除线、spoiler）
         formats = [
             (r"\*([^*]+)\*", lambda m: f"*{escape_v2(m.group(1))}*"),
-            (r"(?<!\w)_([^_\s][^_]*[^_\s]|[^_\s])_(?!\w)", lambda m: f"_{escape_v2(m.group(1))}_"),
+            (
+                r"(?<!\w)_([^_\s][^_]*[^_\s]|[^_\s])_(?!\w)",
+                lambda m: f"_{escape_v2(m.group(1))}_",
+            ),
             (r"~([^~]+)~", lambda m: f"~{escape_v2(m.group(1))}~"),
             (r"\|\|([^|]+)\|\|", lambda m: f"||{escape_v2(m.group(1))}||"),
         ]
@@ -71,7 +77,11 @@ def format_with_markdown_v2(text: str) -> str:
                 placeholder = f"__FORMAT_{i}_{j}__"
                 formatted_content = formatter(match)
                 format_blocks.append((placeholder, formatted_content))
-                result_text = result_text[: match.start()] + placeholder + result_text[match.end() :]
+                result_text = (
+                    result_text[: match.start()]
+                    + placeholder
+                    + result_text[match.end() :]
+                )
 
         # 第四步：转义剩余的普通文本
         escaped_result = escape_v2(result_text)
@@ -87,7 +97,10 @@ def format_with_markdown_v2(text: str) -> str:
             # 在格式块内容中也替换
             for i, (fmt_placeholder, fmt_content) in enumerate(format_blocks):
                 if escaped_placeholder in fmt_content:
-                    format_blocks[i] = (fmt_placeholder, fmt_content.replace(escaped_placeholder, content))
+                    format_blocks[i] = (
+                        fmt_placeholder,
+                        fmt_content.replace(escaped_placeholder, content),
+                    )
 
         for placeholder, content in link_blocks:
             escaped_placeholder = escape_v2(placeholder)
@@ -96,7 +109,10 @@ def format_with_markdown_v2(text: str) -> str:
             # 在格式块内容中也替换
             for i, (fmt_placeholder, fmt_content) in enumerate(format_blocks):
                 if escaped_placeholder in fmt_content:
-                    format_blocks[i] = (fmt_placeholder, fmt_content.replace(escaped_placeholder, content))
+                    format_blocks[i] = (
+                        fmt_placeholder,
+                        fmt_content.replace(escaped_placeholder, content),
+                    )
 
         # 最后恢复格式块
         for placeholder, content in format_blocks:

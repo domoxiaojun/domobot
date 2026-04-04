@@ -11,8 +11,13 @@ from typing import Any
 
 import httpx
 
+from utils.constants import (
+    CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+    CIRCUIT_BREAKER_TIMEOUT,
+    CLEANUP_INTERVAL_NORMAL,
+    CLEANUP_INTERVAL_SLOW,
+)
 from utils.message_manager import delete_user_command, send_error
-
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +37,11 @@ def with_error_handling(func):
         except Exception as e:
             logger.error(f"Error in {func.__name__}: {e}", exc_info=True)
             # 如果是Telegram更新，尝试发送错误消息
-            if len(args) >= 2 and hasattr(args[0], "effective_chat") and hasattr(args[1], "bot"):
+            if (
+                len(args) >= 2
+                and hasattr(args[0], "effective_chat")
+                and hasattr(args[1], "bot")
+            ):
                 try:
                     update, context = args[0], args[1]
 
@@ -40,21 +49,24 @@ def with_error_handling(func):
                     await send_error(
                         context=context,
                         chat_id=update.effective_chat.id,
-                        text="处理请求时发生错误，请稍后重试。\n如果问题持续存在，请联系管理员。"
+                        text="处理请求时发生错误，请稍后重试。\n如果问题持续存在，请联系管理员。",
                     )
 
                     # 删除用户命令消息
-                    if (
-                        hasattr(update, "effective_message")
-                        and getattr(update.effective_message, "message_id", None)
+                    if hasattr(update, "effective_message") and getattr(
+                        update.effective_message, "message_id", None
                     ):
                         await delete_user_command(
                             context=context,
                             chat_id=update.effective_chat.id,
-                            message_id=update.effective_message.message_id
+                            message_id=update.effective_message.message_id,
                         )
-                except Exception:
+                except asyncio.CancelledError:
+                    # 任务被取消，不需要记录
                     pass
+                except Exception as cleanup_error:
+                    # 记录清理过程中的错误，但不影响原异常的抛出
+                    logger.warning(f"发送错误消息或删除命令时失败: {cleanup_error}")
             raise
 
     return wrapper
@@ -98,7 +110,9 @@ def with_retry(config: RetryConfig = None, exceptions: tuple = (Exception,)):
                         await asyncio.sleep(delay)
                         delay *= config.backoff
                     else:
-                        logger.error(f"All retry attempts failed for {func.__name__}: {e}")
+                        logger.error(
+                            f"All retry attempts failed for {func.__name__}: {e}"
+                        )
 
             raise last_exception
 
@@ -110,7 +124,11 @@ def with_retry(config: RetryConfig = None, exceptions: tuple = (Exception,)):
 class CircuitBreaker:
     """熔断器模式实现"""
 
-    def __init__(self, failure_threshold: int = 5, timeout: int = 60):
+    def __init__(
+        self,
+        failure_threshold: int = CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+        timeout: int = CIRCUIT_BREAKER_TIMEOUT,
+    ):
         self.failure_threshold = failure_threshold
         self.timeout = timeout
         self.failure_count = 0
@@ -151,12 +169,17 @@ class CircuitBreaker:
 class CircuitBreakerManager:
     """熔断器管理器，自动清理不活跃的熔断器"""
 
-    def __init__(self, cleanup_interval: int = 3600):  # 1小时清理一次
+    def __init__(self, cleanup_interval: int = CLEANUP_INTERVAL_SLOW):  # 1小时清理一次
         self.circuit_breakers: dict[str, CircuitBreaker] = {}
         self.last_cleanup = time.time()
         self.cleanup_interval = cleanup_interval
 
-    def get_circuit_breaker(self, name: str, failure_threshold: int = 5, timeout: int = 60) -> CircuitBreaker:
+    def get_circuit_breaker(
+        self,
+        name: str,
+        failure_threshold: int = CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+        timeout: int = CIRCUIT_BREAKER_TIMEOUT,
+    ) -> CircuitBreaker:
         """获取或创建熔断器"""
         now = time.time()
 
@@ -177,7 +200,11 @@ class CircuitBreakerManager:
 
         for name, breaker in self.circuit_breakers.items():
             # 如果熔断器超过24小时未失败，且处于关闭状态，则清理
-            if now - breaker.last_failure_time > 86400 and breaker.state == "CLOSED" and breaker.failure_count == 0:
+            if (
+                now - breaker.last_failure_time > 86400
+                and breaker.state == "CLOSED"
+                and breaker.failure_count == 0
+            ):
                 inactive_names.append(name)
 
         for name in inactive_names:
@@ -198,7 +225,9 @@ class RateLimiter:
         now = time.time()
 
         # 清理过期的调用记录
-        self.calls = [call_time for call_time in self.calls if now - call_time < self.time_window]
+        self.calls = [
+            call_time for call_time in self.calls if now - call_time < self.time_window
+        ]
 
         if len(self.calls) >= self.max_calls:
             return False
@@ -210,12 +239,16 @@ class RateLimiter:
 class RateLimiterManager:
     """速率限制器管理器，自动清理过期的限制器"""
 
-    def __init__(self, cleanup_interval: int = 1800):  # 30分钟清理一次
+    def __init__(
+        self, cleanup_interval: int = CLEANUP_INTERVAL_NORMAL
+    ):  # 30分钟清理一次
         self.rate_limiters: dict[str, RateLimiter] = {}
         self.last_cleanup = time.time()
         self.cleanup_interval = cleanup_interval
 
-    def get_rate_limiter(self, name: str, max_calls: int = 10, time_window: int = 60) -> RateLimiter:
+    def get_rate_limiter(
+        self, name: str, max_calls: int = 10, time_window: int = 60
+    ) -> RateLimiter:
         """获取或创建速率限制器"""
         now = time.time()
 
@@ -253,7 +286,9 @@ circuit_breakers = circuit_breaker_manager.circuit_breakers
 rate_limiters = rate_limiter_manager.rate_limiters
 
 
-def with_rate_limit(name: str | None = None, max_calls: int = 10, time_window: int = 60):
+def with_rate_limit(
+    name: str | None = None, max_calls: int = 10, time_window: int = 60
+):
     """速率限制装饰器"""
 
     def decorator(func):
@@ -262,7 +297,9 @@ def with_rate_limit(name: str | None = None, max_calls: int = 10, time_window: i
         @wraps(func)
         async def wrapper(update, context, *args, **kwargs):
             user_id = update.effective_user.id if update.effective_user else 0
-            rate_limiter = rate_limiter_manager.get_rate_limiter(limiter_name, max_calls, time_window)
+            rate_limiter = rate_limiter_manager.get_rate_limiter(
+                limiter_name, max_calls, time_window
+            )
 
             if await rate_limiter.acquire(user_id):
                 return await func(update, context, *args, **kwargs)
@@ -271,18 +308,17 @@ def with_rate_limit(name: str | None = None, max_calls: int = 10, time_window: i
                 await send_error(
                     context=context,
                     chat_id=update.effective_chat.id,
-                    text="⚠️ 请求频率过高，请稍后重试。"
+                    text="⚠️ 请求频率过高，请稍后重试。",
                 )
 
                 # 删除用户命令消息
-                if (
-                    hasattr(update, "effective_message")
-                    and getattr(update.effective_message, "message_id", None)
+                if hasattr(update, "effective_message") and getattr(
+                    update.effective_message, "message_id", None
                 ):
                     await delete_user_command(
                         context=context,
                         chat_id=update.effective_chat.id,
-                        message_id=update.effective_message.message_id
+                        message_id=update.effective_message.message_id,
                     )
 
         return wrapper
@@ -304,9 +340,16 @@ class ErrorAnalyzer:
         }
 
         if isinstance(error, httpx.TimeoutException):
-            error_info.update({"type": "timeout", "user_message": "⏱️ 请求超时，请稍后重试。"})
+            error_info.update(
+                {"type": "timeout", "user_message": "⏱️ 请求超时，请稍后重试。"}
+            )
         elif isinstance(error, httpx.ConnectError):
-            error_info.update({"type": "connection", "user_message": "🌐 网络连接失败，请检查网络状态。"})
+            error_info.update(
+                {
+                    "type": "connection",
+                    "user_message": "🌐 网络连接失败，请检查网络状态。",
+                }
+            )
         elif isinstance(error, httpx.HTTPStatusError):
             status_code = error.response.status_code
             if status_code == 429:
@@ -320,9 +363,16 @@ class ErrorAnalyzer:
                     }
                 )
             elif status_code >= 500:
-                error_info.update({"type": "server_error", "user_message": "🔧 服务器暂时不可用，请稍后重试。"})
+                error_info.update(
+                    {
+                        "type": "server_error",
+                        "user_message": "🔧 服务器暂时不可用，请稍后重试。",
+                    }
+                )
             elif status_code == 404:
-                error_info.update({"type": "not_found", "user_message": "❓ 请求的资源不存在。"})
+                error_info.update(
+                    {"type": "not_found", "user_message": "❓ 请求的资源不存在。"}
+                )
 
         return error_info
 
@@ -342,18 +392,17 @@ def handle_api_errors(func):
             await send_error(
                 context=context,
                 chat_id=update.effective_chat.id,
-                text=error_info["user_message"]
+                text=error_info["user_message"],
             )
 
             # 删除用户命令消息
-            if (
-                hasattr(update, "effective_message")
-                and getattr(update.effective_message, "message_id", None)
+            if hasattr(update, "effective_message") and getattr(
+                update.effective_message, "message_id", None
             ):
                 await delete_user_command(
                     context=context,
                     chat_id=update.effective_chat.id,
-                    message_id=update.effective_message.message_id
+                    message_id=update.effective_message.message_id,
                 )
 
     return wrapper

@@ -8,14 +8,21 @@ import threading
 import time
 from typing import Any
 
+from utils.constants import SESSION_CLEANUP_INTERVAL, SESSION_MAX_AGE
 
 logger = logging.getLogger(__name__)
 
 
 class SessionData:
     """会话数据"""
-    
-    def __init__(self, data: dict[str, Any], created_at: float, last_accessed: float, session_type: str = "default"):
+
+    def __init__(
+        self,
+        data: dict[str, Any],
+        created_at: float,
+        last_accessed: float,
+        session_type: str = "default",
+    ):
         self.data = data
         self.created_at = created_at
         self.last_accessed = last_accessed
@@ -28,7 +35,9 @@ class SessionManager:
     自动过期清理，防止内存泄漏
     """
 
-    def __init__(self, name: str, max_age: int = 3600, max_sessions: int = 1000):
+    def __init__(
+        self, name: str, max_age: int = SESSION_MAX_AGE, max_sessions: int = 1000
+    ):
         """
         初始化会话管理器
 
@@ -43,9 +52,11 @@ class SessionManager:
         self.max_sessions = max_sessions
         self._lock = threading.RLock()
         self._last_cleanup = time.time()
-        self._cleanup_interval = 300  # 5分钟清理一次
+        self._cleanup_interval = SESSION_CLEANUP_INTERVAL  # 5分钟清理一次
 
-    def set_session(self, user_id: int, data: dict[str, Any], session_type: str = "default") -> None:
+    def set_session(
+        self, user_id: int, data: dict[str, Any], session_type: str = "default"
+    ) -> None:
         """
         设置用户会话
 
@@ -71,7 +82,9 @@ class SessionManager:
             # 强制执行数量限制
             self._enforce_session_limit()
 
-            logger.debug(f"{self.name}: 设置用户 {user_id} 的会话 (类型: {session_type})")
+            logger.debug(
+                f"{self.name}: 设置用户 {user_id} 的会话 (类型: {session_type})"
+            )
 
     def get_session(self, user_id: int) -> dict[str, Any] | None:
         """
@@ -114,7 +127,9 @@ class SessionManager:
             if user_id in self.sessions:
                 session_type = self.sessions[user_id].session_type
                 del self.sessions[user_id]
-                logger.debug(f"{self.name}: 移除用户 {user_id} 的会话 (类型: {session_type})")
+                logger.debug(
+                    f"{self.name}: 移除用户 {user_id} 的会话 (类型: {session_type})"
+                )
                 return True
             return False
 
@@ -143,7 +158,9 @@ class SessionManager:
             return
 
         # 按最后访问时间排序，移除最旧的会话
-        sorted_sessions = sorted(self.sessions.items(), key=lambda x: x[1].last_accessed)
+        sorted_sessions = sorted(
+            self.sessions.items(), key=lambda x: x[1].last_accessed
+        )
 
         # 移除多余的会话（保留一些余量）
         to_remove = len(self.sessions) - self.max_sessions + 50
@@ -154,7 +171,9 @@ class SessionManager:
             removed_count += 1
 
         if removed_count > 0:
-            logger.warning(f"{self.name}: 达到会话数量限制，移除了 {removed_count} 个最旧的会话")
+            logger.warning(
+                f"{self.name}: 达到会话数量限制，移除了 {removed_count} 个最旧的会话"
+            )
 
     def force_cleanup(self) -> dict[str, int]:
         """强制清理所有过期会话和统计信息"""
@@ -188,7 +207,9 @@ class SessionManager:
                 "total_sessions": len(self.sessions),
                 "max_sessions_limit": self.max_sessions,
                 "max_age_limit": self.max_age,
-                "avg_age_seconds": sum(session_ages) / len(session_ages) if session_ages else 0,
+                "avg_age_seconds": (
+                    sum(session_ages) / len(session_ages) if session_ages else 0
+                ),
                 "oldest_session_age": max(session_ages) if session_ages else 0,
                 "session_types": session_types,
                 "memory_usage_estimate_kb": len(self.sessions) * 2,  # 粗略估计
@@ -204,9 +225,9 @@ class SessionManager:
 
 
 # 创建全局会话管理器实例
-app_search_session_manager = SessionManager("AppSearch", max_age=3600, max_sessions=500)
-steam_search_session_manager = SessionManager("SteamSearch", max_age=3600, max_sessions=500)
-steam_bundle_session_manager = SessionManager("SteamBundle", max_age=3600, max_sessions=300)
+app_search_session_manager = SessionManager("AppSearch", max_sessions=500)
+steam_search_session_manager = SessionManager("SteamSearch", max_sessions=500)
+steam_bundle_session_manager = SessionManager("SteamBundle", max_sessions=300)
 
 
 # 为了向后兼容，提供字典式接口的包装器
@@ -257,5 +278,9 @@ class CompatibleSessionDict:
 
 # 创建兼容性接口
 app_search_sessions = CompatibleSessionDict(app_search_session_manager, "app_search")
-steam_search_sessions = CompatibleSessionDict(steam_search_session_manager, "steam_search")
-steam_bundle_sessions = CompatibleSessionDict(steam_bundle_session_manager, "steam_bundle")
+steam_search_sessions = CompatibleSessionDict(
+    steam_search_session_manager, "steam_search"
+)
+steam_bundle_sessions = CompatibleSessionDict(
+    steam_bundle_session_manager, "steam_bundle"
+)

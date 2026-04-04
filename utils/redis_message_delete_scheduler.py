@@ -11,7 +11,6 @@ import redis.asyncio as redis
 from telegram import Bot
 from telegram.error import TelegramError
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -51,7 +50,9 @@ class RedisMessageDeleteScheduler:
             logger.info("🔍 检查遗留的消息删除任务...")
 
             # 获取所有已到期的任务（包括遗留任务）
-            expired_tasks = await self.redis.zrangebyscore("msg:delete:schedule", 0, current_time, withscores=False)
+            expired_tasks = await self.redis.zrangebyscore(
+                "msg:delete:schedule", 0, current_time, withscores=False
+            )
 
             if expired_tasks:
                 for key in expired_tasks:
@@ -96,7 +97,9 @@ class RedisMessageDeleteScheduler:
             self._task.cancel()
         logger.info("Redis 消息删除调度器已停止")
 
-    async def schedule_deletion(self, chat_id: int, message_id: int, delay: int, session_id: str | None = None):
+    async def schedule_deletion(
+        self, chat_id: int, message_id: int, delay: int, session_id: str | None = None
+    ):
         """
         调度消息删除
 
@@ -151,7 +154,9 @@ class RedisMessageDeleteScheduler:
                 current_time = time.time()
 
                 # 获取所有到期的任务
-                expired_tasks = await self.redis.zrangebyscore("msg:delete:schedule", 0, current_time, withscores=False)
+                expired_tasks = await self.redis.zrangebyscore(
+                    "msg:delete:schedule", 0, current_time, withscores=False
+                )
 
                 if expired_tasks:
                     for key in expired_tasks:
@@ -296,7 +301,9 @@ class RedisMessageDeleteScheduler:
 _redis_message_delete_scheduler: RedisMessageDeleteScheduler | None = None
 
 
-def get_message_delete_scheduler(redis_client: redis.Redis) -> RedisMessageDeleteScheduler:
+def get_message_delete_scheduler(
+    redis_client: redis.Redis,
+) -> RedisMessageDeleteScheduler:
     """获取消息删除调度器实例"""
     global _redis_message_delete_scheduler
     if _redis_message_delete_scheduler is None:

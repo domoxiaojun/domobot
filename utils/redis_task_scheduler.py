@@ -11,6 +11,7 @@ from collections.abc import Callable
 
 import redis.asyncio as redis
 
+from utils.constants import TIME_SEVEN_DAYS, TIME_THIRTY_MINUTES
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,9 @@ class RedisTaskScheduler:
             self._task.cancel()
         logger.info("Redis 任务调度器已停止")
 
-    async def schedule_task(self, task_id: str, task_type: str, execute_at: float, data: dict | None = None):
+    async def schedule_task(
+        self, task_id: str, task_type: str, execute_at: float, data: dict | None = None
+    ):
         """
         调度任务
 
@@ -80,7 +83,12 @@ class RedisTaskScheduler:
         logger.debug(f"任务已调度: {task_id}, 执行时间: {execute_at}")
 
     async def add_weekly_cache_cleanup(
-        self, task_id: str, cache_key: str, weekday: int = 6, hour: int = 5, minute: int = 0
+        self,
+        task_id: str,
+        cache_key: str,
+        weekday: int = 6,
+        hour: int = 5,
+        minute: int = 0,
     ):
         """
         添加每周缓存清理任务（兼容原接口）
@@ -112,7 +120,12 @@ class RedisTaskScheduler:
             task_id=f"weekly_cleanup_{cache_key}",
             task_type="weekly_cleanup",
             execute_at=next_run.timestamp(),
-            data={"cache_key": cache_key, "weekday": weekday, "hour": hour, "minute": minute},
+            data={
+                "cache_key": cache_key,
+                "weekday": weekday,
+                "hour": hour,
+                "minute": minute,
+            },
         )
 
         logger.info(f"已添加每周清理任务: {cache_key}, 下次执行: {next_run}")
@@ -127,7 +140,9 @@ class RedisTaskScheduler:
                 current_time = time.time()
 
                 # 获取到期任务
-                due_tasks = await self.redis.zrangebyscore("tasks:scheduled", 0, current_time, withscores=False)
+                due_tasks = await self.redis.zrangebyscore(
+                    "tasks:scheduled", 0, current_time, withscores=False
+                )
 
                 if due_tasks:
                     # 处理到期任务
@@ -175,11 +190,11 @@ class RedisTaskScheduler:
             # 如果是周期性任务，重新调度
             if task_type == "weekly_cleanup":
                 # 计算下次执行时间（7天后）
-                next_run = time.time() + (7 * 24 * 60 * 60)
+                next_run = time.time() + TIME_SEVEN_DAYS
                 await self.schedule_task(task_id, task_type, next_run, data)
             elif task_type == "rate_refresh":
                 # 汇率刷新任务每30分钟执行一次
-                next_run = time.time() + (30 * 60)
+                next_run = time.time() + TIME_THIRTY_MINUTES
                 await self.schedule_task(task_id, task_type, next_run, data)
 
         except Exception as e:
@@ -256,7 +271,9 @@ class RedisTaskScheduler:
         task_id = "rate_refresh_periodic"
         execute_at = time.time() + (delay_minutes * 60)
 
-        await self.schedule_task(task_id=task_id, task_type="rate_refresh", execute_at=execute_at, data={})
+        await self.schedule_task(
+            task_id=task_id, task_type="rate_refresh", execute_at=execute_at, data={}
+        )
 
         logger.info(f"已调度汇率刷新任务，将在 {delay_minutes} 分钟后执行")
 

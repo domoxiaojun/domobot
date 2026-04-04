@@ -12,6 +12,7 @@ from typing import Optional
 
 import httpx
 
+from utils.constants import HTTP_TIMEOUT_DEFAULT
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ class SensorTowerAPI:
     REQUEST_INTERVAL = 0.5
 
     # 请求超时（秒）
-    TIMEOUT = 10
+    TIMEOUT = HTTP_TIMEOUT_DEFAULT
 
     # User-Agent
     USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"

@@ -7,6 +7,11 @@ import logging
 
 import httpx
 
+from utils.constants import (
+    HTTP_TIMEOUT_DEFAULT,
+    HTTP_TIMEOUT_LONG,
+    HTTP_TIMEOUT_SHORT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +34,13 @@ def get_http_client() -> httpx.AsyncClient:
             limits=httpx.Limits(
                 max_keepalive_connections=20,  # 最大保持连接数
                 max_connections=100,  # 最大总连接数
-                keepalive_expiry=30.0,  # 连接保持时间（秒）
+                keepalive_expiry=HTTP_TIMEOUT_LONG,  # 连接保持时间（秒）
             ),
             timeout=httpx.Timeout(
-                connect=10.0,  # 连接超时
-                read=30.0,  # 读取超时
-                write=10.0,  # 写入超时
-                pool=5.0,  # 连接池获取超时
+                connect=HTTP_TIMEOUT_DEFAULT,  # 连接超时
+                read=HTTP_TIMEOUT_LONG,  # 读取超时
+                write=HTTP_TIMEOUT_DEFAULT,  # 写入超时
+                pool=HTTP_TIMEOUT_SHORT,  # 连接池获取超时
             ),
             http2=True,  # 启用 HTTP/2 支持
             follow_redirects=True,  # 自动跟随重定向
@@ -66,13 +71,22 @@ def create_custom_client(
         httpx.AsyncClient: 自定义配置的异步 HTTP 客户端
     """
     # 使用基础优化配置
-    limits = httpx.Limits(max_keepalive_connections=20, max_connections=100, keepalive_expiry=30.0)
+    limits = httpx.Limits(
+        max_keepalive_connections=20,
+        max_connections=100,
+        keepalive_expiry=HTTP_TIMEOUT_LONG,
+    )
 
     # 自定义超时配置
     if timeout:
         timeout_config = httpx.Timeout(timeout)
     else:
-        timeout_config = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=5.0)
+        timeout_config = httpx.Timeout(
+            connect=HTTP_TIMEOUT_DEFAULT,
+            read=HTTP_TIMEOUT_LONG,
+            write=HTTP_TIMEOUT_DEFAULT,
+            pool=HTTP_TIMEOUT_SHORT,
+        )
 
     return httpx.AsyncClient(
         headers=headers,

@@ -11,6 +11,7 @@ import time
 from asyncio import Task
 from typing import Any
 
+from utils.constants import CLEANUP_INTERVAL_FAST
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,9 @@ class TaskManager:
     - 优雅关闭支持
     """
 
-    def __init__(self, max_tasks: int = 1000, cleanup_interval: int = 60):
+    def __init__(
+        self, max_tasks: int = 1000, cleanup_interval: int = CLEANUP_INTERVAL_FAST
+    ):
         """
         初始化任务管理器
 
@@ -43,7 +46,9 @@ class TaskManager:
 
         logger.info(f"任务管理器已初始化，最大任务数: {max_tasks}")
 
-    def create_task(self, coro, name: str | None = None, context: str | None = None) -> Task:
+    def create_task(
+        self, coro, name: str | None = None, context: str | None = None
+    ) -> Task:
         """创建并跟踪异步任务
 
         Args:
@@ -94,7 +99,9 @@ class TaskManager:
         if task.cancelled():
             logger.debug(f"任务被取消: {metadata.get('name', 'unknown')}")
         elif task.exception():
-            logger.warning(f"任务执行失败: {metadata.get('name', 'unknown')}, 错误: {task.exception()}")
+            logger.warning(
+                f"任务执行失败: {metadata.get('name', 'unknown')}, 错误: {task.exception()}"
+            )
         else:
             logger.debug(f"任务完成: {metadata.get('name', 'unknown')}")
 
@@ -137,7 +144,9 @@ class TaskManager:
         # 等待任务完成或取消（最多等待30秒）
         if self.tasks:
             try:
-                await asyncio.wait_for(asyncio.gather(*self.tasks, return_exceptions=True), timeout=30.0)
+                await asyncio.wait_for(
+                    asyncio.gather(*self.tasks, return_exceptions=True), timeout=30.0
+                )
             except TimeoutError:
                 logger.warning("等待任务完成超时，强制结束")
 

@@ -7,7 +7,6 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from utils.command_factory import command_factory
-from utils.country_data import SUPPORTED_COUNTRIES  # To get currency symbols
 from utils.formatter import foldable_text_v2, foldable_text_with_markdown_v2
 from utils.message_manager import (
     delete_user_command,
@@ -17,121 +16,10 @@ from utils.message_manager import (
     send_success,
 )
 from utils.permissions import Permission
-from utils.rate_converter import RateConverter
-
+from utils.price_parser import get_currency_symbol
 
 # Configure logging - 避免重复配置日志
 logger = logging.getLogger(__name__)
-
-rate_converter: RateConverter | None = None
-
-
-def set_rate_converter(converter: RateConverter):
-    global rate_converter
-    rate_converter = converter
-
-
-def get_currency_symbol(currency_code: str) -> str:
-    """Returns the symbol for a given currency code from SUPPORTED_COUNTRIES or a common mapping."""
-    # Check SUPPORTED_COUNTRIES first
-    for country_info in SUPPORTED_COUNTRIES.values():
-        if country_info.get("currency") == currency_code.upper():
-            return country_info.get("symbol", "")
-
-    # Fallback to common symbols if not found in country data
-    common_symbols = {
-        "USD": "$",
-        "EUR": "€",
-        "GBP": "£",
-        "JPY": "¥",
-        "CNY": "¥",
-        "KRW": "₩",
-        "INR": "₹",
-        "RUB": "₽",
-        "TRY": "₺",
-        "THB": "฿",
-        "IDR": "Rp",
-        "MYR": "RM",
-        "SGD": "S$",
-        "CAD": "C$",
-        "HKD": "HK$",
-        "TWD": "NT$",
-        "BRL": "R$",
-        "NGN": "₦",
-        "UAH": "₴",
-        "ILS": "₪",
-        "CZK": "Kč",
-        "PLN": "zł",
-        "SEK": "kr",
-        "NOK": "kr",
-        "DKK": "kr",
-        "CHF": "CHF",
-        "AED": "د.إ",
-        "SAR": "ر.س",
-        "QAR": "ر.ق",
-        "KWD": "د.ك",
-        "BHD": ".د.ب",
-        "OMR": "ر.ع.",
-        "EGP": "£",
-        "MXN": "$",
-        "ARS": "$",
-        "CLP": "$",
-        "COP": "$",
-        "PEN": "S/",
-        "VES": "Bs.",
-        "NZD": "NZ$",
-        "BGN": "лв",
-        "HUF": "Ft",
-        "ISK": "kr",
-        "LKR": "Rs",
-        "MNT": "₮",
-        "KZT": "₸",
-        "AZN": "₼",
-        "AMD": "֏",
-        "GEL": "₾",
-        "MDL": "L",
-        "RON": "lei",
-        "RSD": "дин",
-        "BYN": "Br",
-        "UZS": "сўм",
-        "LAK": "₭",
-        "KHR": "៛",
-        "MMK": "Ks",
-        "BDT": "৳",
-        "NPR": "₨",
-        "PKR": "₨",
-        "PHP": "₱",
-        "VND": "₫",
-        "LBP": "ل.ل",
-        "JOD": "د.ا",
-        "SYP": "£",
-        "YER": "﷼",
-        "DZD": "دج",
-        "LYD": "ل.د",
-        "MAD": "د.م.",
-        "TND": "د.ت",
-        "FJD": "$",
-        "WST": "T",
-        "TOP": "T$",
-        "PGK": "K",
-        "SBD": "$",
-        "SHP": "£",
-        "STD": "Db",
-        "TJS": "ЅМ",
-        "TMT": "m",
-        "ZAR": "R",
-        "ZWL": "$",
-        "BYR": "Br",
-        "GHS": "₵",
-        "MOP": "MOP$",
-        "UYU": "$U",
-        "VEF": "Bs.F.",
-        "XAF": "FCFA",
-        "XCD": "$",
-        "XOF": "CFA",
-        "XPF": "₣",
-    }
-    return common_symbols.get(currency_code.upper(), "")
 
 
 async def rate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -139,14 +27,23 @@ async def rate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not update.message:
         return
 
+    # 从 context.bot_data 获取依赖
+    rate_converter = context.bot_data.get("rate_converter")
     if not rate_converter:
         error_message = "汇率转换器未初始化。请联系机器人管理员。"
-        await send_error(context, update.message.chat_id, foldable_text_v2(error_message), parse_mode="MarkdownV2")
+        await send_error(
+            context,
+            update.message.chat_id,
+            foldable_text_v2(error_message),
+            parse_mode="MarkdownV2",
+        )
         return
 
     loading_message = "🔍 正在查询中... ⏳"
     message = await context.bot.send_message(
-        chat_id=update.message.chat_id, text=foldable_text_v2(loading_message), parse_mode="MarkdownV2"
+        chat_id=update.message.chat_id,
+        text=foldable_text_v2(loading_message),
+        parse_mode="MarkdownV2",
     )
 
     args = context.args
@@ -173,8 +70,15 @@ async def rate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
 
         await message.delete()
-        await send_help(context, update.message.chat_id, foldable_text_with_markdown_v2(help_message), parse_mode="MarkdownV2")
-        await delete_user_command(context, update.message.chat_id, update.message.message_id)
+        await send_help(
+            context,
+            update.message.chat_id,
+            foldable_text_with_markdown_v2(help_message),
+            parse_mode="MarkdownV2",
+        )
+        await delete_user_command(
+            context, update.message.chat_id, update.message.message_id
+        )
         return
 
     # Parse arguments
@@ -200,8 +104,15 @@ async def rate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 except ValueError:
                     error_message = f"❌ 无效的金额或表达式: {amount_str}"
                     await message.delete()
-                    await send_error(context, update.message.chat_id, foldable_text_v2(error_message), parse_mode="MarkdownV2")
-                    await delete_user_command(context, update.message.chat_id, update.message.message_id)
+                    await send_error(
+                        context,
+                        update.message.chat_id,
+                        foldable_text_v2(error_message),
+                        parse_mode="MarkdownV2",
+                    )
+                    await delete_user_command(
+                        context, update.message.chat_id, update.message.message_id
+                    )
                     return
     elif len(args) == 3:
         from_currency = args[0].upper()
@@ -218,14 +129,28 @@ async def rate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             except ValueError:
                 error_message = f"❌ 无效的金额或表达式: {amount_str}"
                 await message.delete()
-                await send_error(context, update.message.chat_id, foldable_text_v2(error_message), parse_mode="MarkdownV2")
-                await delete_user_command(context, update.message.chat_id, update.message.message_id)
+                await send_error(
+                    context,
+                    update.message.chat_id,
+                    foldable_text_v2(error_message),
+                    parse_mode="MarkdownV2",
+                )
+                await delete_user_command(
+                    context, update.message.chat_id, update.message.message_id
+                )
                 return
     else:
         error_message = "❌ 参数过多。请检查使用方法。"
         await message.delete()
-        await send_error(context, update.message.chat_id, foldable_text_v2(error_message), parse_mode="MarkdownV2")
-        await delete_user_command(context, update.message.chat_id, update.message.message_id)
+        await send_error(
+            context,
+            update.message.chat_id,
+            foldable_text_v2(error_message),
+            parse_mode="MarkdownV2",
+        )
+        await delete_user_command(
+            context, update.message.chat_id, update.message.message_id
+        )
         return
 
     # 快速检查数据可用性（无需等待网络）
@@ -235,31 +160,61 @@ async def rate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if not rate_converter.rates:
             error_message = "❌ 汇率数据暂时不可用。请稍后重试。"
             await message.delete()
-            await send_error(context, update.message.chat_id, foldable_text_v2(error_message), parse_mode="MarkdownV2")
-            await delete_user_command(context, update.message.chat_id, update.message.message_id)
+            await send_error(
+                context,
+                update.message.chat_id,
+                foldable_text_v2(error_message),
+                parse_mode="MarkdownV2",
+            )
+            await delete_user_command(
+                context, update.message.chat_id, update.message.message_id
+            )
             return
 
     if from_currency not in rate_converter.rates:
         error_message = f"❌ 不支持的起始货币: {from_currency}"
         await message.delete()
-        await send_error(context, update.message.chat_id, foldable_text_v2(error_message), parse_mode="MarkdownV2")
-        await delete_user_command(context, update.message.chat_id, update.message.message_id)
+        await send_error(
+            context,
+            update.message.chat_id,
+            foldable_text_v2(error_message),
+            parse_mode="MarkdownV2",
+        )
+        await delete_user_command(
+            context, update.message.chat_id, update.message.message_id
+        )
         return
     if to_currency not in rate_converter.rates:
         error_message = f"❌ 不支持的目标货币: {to_currency}"
         await message.delete()
-        await send_error(context, update.message.chat_id, foldable_text_v2(error_message), parse_mode="MarkdownV2")
-        await delete_user_command(context, update.message.chat_id, update.message.message_id)
+        await send_error(
+            context,
+            update.message.chat_id,
+            foldable_text_v2(error_message),
+            parse_mode="MarkdownV2",
+        )
+        await delete_user_command(
+            context, update.message.chat_id, update.message.message_id
+        )
         return
 
     try:
         # 直接转换，无需额外的 get_rates() 调用
-        converted_amount = await rate_converter.convert(amount, from_currency, to_currency)
+        converted_amount = await rate_converter.convert(
+            amount, from_currency, to_currency
+        )
         if converted_amount is None:
             error_message = "❌ 转换失败，请检查货币代码。"
             await message.delete()
-            await send_error(context, update.message.chat_id, foldable_text_v2(error_message), parse_mode="MarkdownV2")
-            await delete_user_command(context, update.message.chat_id, update.message.message_id)
+            await send_error(
+                context,
+                update.message.chat_id,
+                foldable_text_v2(error_message),
+                parse_mode="MarkdownV2",
+            )
+            await delete_user_command(
+                context, update.message.chat_id, update.message.message_id
+            )
             return
 
         from_symbol = get_currency_symbol(from_currency)
@@ -274,7 +229,9 @@ async def rate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         result_lines.append("━━━━━━━━━━━━━━━━")
 
         if expression:
-            result_lines.extend(["", "🧮 *计算公式*", f"   `{expression}` = `{formatted_amount}`"])
+            result_lines.extend(
+                ["", "🧮 *计算公式*", f"   `{expression}` = `{formatted_amount}`"]
+            )
 
         result_lines.extend(
             [
@@ -291,15 +248,29 @@ async def rate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         result_text = "\n".join(result_lines)
 
         await message.delete()
-        await send_search_result(context, update.message.chat_id, foldable_text_with_markdown_v2(result_text), parse_mode="MarkdownV2")
-        await delete_user_command(context, update.message.chat_id, update.message.message_id)
+        await send_search_result(
+            context,
+            update.message.chat_id,
+            foldable_text_with_markdown_v2(result_text),
+            parse_mode="MarkdownV2",
+        )
+        await delete_user_command(
+            context, update.message.chat_id, update.message.message_id
+        )
 
     except Exception as e:
         logger.error(f"Error during rate conversion: {e}")
         error_message = f"❌ 转换时发生错误: {e!s}"
         await message.delete()
-        await send_error(context, update.message.chat_id, foldable_text_v2(error_message), parse_mode="MarkdownV2")
-        await delete_user_command(context, update.message.chat_id, update.message.message_id)
+        await send_error(
+            context,
+            update.message.chat_id,
+            foldable_text_v2(error_message),
+            parse_mode="MarkdownV2",
+        )
+        await delete_user_command(
+            context, update.message.chat_id, update.message.message_id
+        )
 
 
 async def rate_clean_cache_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -308,24 +279,52 @@ async def rate_clean_cache_command(update: Update, context: ContextTypes.DEFAULT
         return
 
     try:
+        # 从 context.bot_data 获取依赖
+        rate_converter = context.bot_data.get("rate_converter")
         if rate_converter:
             await rate_converter.cache_manager.clear_cache(key="exchange_rates")
             success_message = "✅ 汇率缓存已清理。"
-            await send_success(context, update.message.chat_id, foldable_text_v2(success_message), parse_mode="MarkdownV2")
-            await delete_user_command(context, update.message.chat_id, update.message.message_id)
+            await send_success(
+                context,
+                update.message.chat_id,
+                foldable_text_v2(success_message),
+                parse_mode="MarkdownV2",
+            )
+            await delete_user_command(
+                context, update.message.chat_id, update.message.message_id
+            )
         else:
             warning_message = "⚠️ 汇率转换器未初始化，无需清理缓存。"
-            await send_error(context, update.message.chat_id, foldable_text_v2(warning_message), parse_mode="MarkdownV2")
-            await delete_user_command(context, update.message.chat_id, update.message.message_id)
+            await send_error(
+                context,
+                update.message.chat_id,
+                foldable_text_v2(warning_message),
+                parse_mode="MarkdownV2",
+            )
+            await delete_user_command(
+                context, update.message.chat_id, update.message.message_id
+            )
     except Exception as e:
         logger.error(f"Error clearing rate cache: {e}")
         error_message = f"❌ 清理汇率缓存时发生错误: {e!s}"
-        await send_error(context, update.message.chat_id, foldable_text_v2(error_message), parse_mode="MarkdownV2")
-        await delete_user_command(context, update.message.chat_id, update.message.message_id)
+        await send_error(
+            context,
+            update.message.chat_id,
+            foldable_text_v2(error_message),
+            parse_mode="MarkdownV2",
+        )
+        await delete_user_command(
+            context, update.message.chat_id, update.message.message_id
+        )
 
 
 # Register commands
-command_factory.register_command("rate", rate_command, permission=Permission.USER, description="汇率查询和转换")
 command_factory.register_command(
-    "rate_cleancache", rate_clean_cache_command, permission=Permission.ADMIN, description="清理汇率缓存"
+    "rate", rate_command, permission=Permission.USER, description="汇率查询和转换"
+)
+command_factory.register_command(
+    "rate_cleancache",
+    rate_clean_cache_command,
+    permission=Permission.ADMIN,
+    description="清理汇率缓存",
 )

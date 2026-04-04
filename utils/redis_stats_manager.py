@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 import redis.asyncio as redis
 
+from utils.constants import TIME_SEVEN_DAYS, TIME_THIRTY_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,9 @@ class RedisStatsManager:
         """初始化统计管理器"""
         self.redis = redis_client
 
-    async def record_command_usage(self, command: str, user_id: int, chat_id: int, chat_type: str):
+    async def record_command_usage(
+        self, command: str, user_id: int, chat_id: int, chat_type: str
+    ):
         """
         记录命令使用情况
 
@@ -41,26 +44,31 @@ class RedisStatsManager:
             # 2. 增加今日命令计数
             await self.redis.hincrby(f"stats:commands:daily:{today}", command, 1)
             # 设置过期时间（保留7天）
-            await self.redis.expire(f"stats:commands:daily:{today}", 7 * 24 * 60 * 60)
+            await self.redis.expire(f"stats:commands:daily:{today}", TIME_SEVEN_DAYS)
 
             # 3. 记录用户活跃度
             await self.redis.zadd("stats:active_users", {str(user_id): time.time()})
 
             # 4. 记录每日活跃用户（使用 HyperLogLog）
             await self.redis.pfadd(f"stats:dau:{today}", user_id)
-            await self.redis.expire(f"stats:dau:{today}", 30 * 24 * 60 * 60)  # 保留30天
+            await self.redis.expire(f"stats:dau:{today}", TIME_THIRTY_DAYS)  # 保留30天
 
             # 5. 记录聊天类型统计
             await self.redis.hincrby(f"stats:chat_type:{chat_type}", command, 1)
 
             # 6. 记录用户命令历史（最近10条）
             user_history_key = f"stats:user_history:{user_id}"
-            history_entry = {"command": command, "chat_id": chat_id, "chat_type": chat_type, "timestamp": time.time()}
+            history_entry = {
+                "command": command,
+                "chat_id": chat_id,
+                "chat_type": chat_type,
+                "timestamp": time.time(),
+            }
 
             # 使用列表存储，保持最近10条
             await self.redis.lpush(user_history_key, json.dumps(history_entry))
             await self.redis.ltrim(user_history_key, 0, 9)  # 只保留最近10条
-            await self.redis.expire(user_history_key, 30 * 24 * 60 * 60)  # 30天过期
+            await self.redis.expire(user_history_key, TIME_THIRTY_DAYS)  # 30天过期
 
             logger.debug(f"命令使用已记录: {command} by {user_id}")
 
@@ -94,7 +102,9 @@ class RedisStatsManager:
                 week_stats = {}
                 for i in range(7):
                     date = (datetime.utcnow() - timedelta(days=i)).strftime("%Y-%m-%d")
-                    daily_stats = await self.redis.hgetall(f"stats:commands:daily:{date}")
+                    daily_stats = await self.redis.hgetall(
+                        f"stats:commands:daily:{date}"
+                    )
 
                     for cmd, count in daily_stats.items():
                         if cmd not in week_stats:
@@ -125,7 +135,9 @@ class RedisStatsManager:
             threshold = time.time() - (hours * 60 * 60)
 
             # 获取活跃用户
-            users = await self.redis.zrangebyscore("stats:active_users", threshold, "+inf")
+            users = await self.redis.zrangebyscore(
+                "stats:active_users", threshold, "+inf"
+            )
 
             return [int(user_id) for user_id in users]
 
@@ -162,7 +174,9 @@ class RedisStatsManager:
             logger.error(f"获取DAU失败: {e}")
             return 0
 
-    async def get_top_commands(self, limit: int = 10, period: str = "total") -> list[tuple]:
+    async def get_top_commands(
+        self, limit: int = 10, period: str = "total"
+    ) -> list[tuple]:
         """
         获取热门命令
 
@@ -215,7 +229,9 @@ class RedisStatsManager:
             stats = {}
             for chat_type in ["private", "group", "supergroup"]:
                 type_stats = await self.redis.hgetall(f"stats:chat_type:{chat_type}")
-                stats[chat_type] = {cmd: int(count) for cmd, count in type_stats.items()}
+                stats[chat_type] = {
+                    cmd: int(count) for cmd, count in type_stats.items()
+                }
 
             return stats
 
@@ -233,7 +249,7 @@ class RedisStatsManager:
                 await self.redis.delete(f"stats:dau:{date}")
 
             # 清理不活跃用户（超过30天）
-            threshold = time.time() - (30 * 24 * 60 * 60)
+            threshold = time.time() - (TIME_THIRTY_DAYS)
             await self.redis.zremrangebyscore("stats:active_users", 0, threshold)
 
             logger.info("旧统计数据清理完成")
@@ -257,4 +273,3 @@ class RedisStatsManager:
 
         except Exception as e:
             logger.error(f"重置统计数据失败: {e}")
-

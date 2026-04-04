@@ -14,9 +14,18 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, MessageHandler, filters
 
-
 # 使用主程序的日志记录器
 logger = logging.getLogger(__name__)
+
+# ============================================
+# 脚本默认配置 (可被 .env 中的 ALERTER_CONFIG 覆盖)
+# ============================================
+DEFAULT_ALERTER_CONFIG = {
+    # 示例配置 (请根据实际情况修改):
+    # "-1001234567890": "example_user",  # 群组ID → 监听的用户名
+    # 在此处添加你的群组配置:
+    # "-100群组ID": "监听的用户名",
+}
 
 # 回复消息模板
 ALERT_TEMPLATE = """🚗 <b>发车啦！请仔细核对车主信息</b> 🚙
@@ -48,7 +57,9 @@ def get_script_info():
     return info
 
 
-async def group_message_alerter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def group_message_alerter(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """
     处理群组消息并回复的处理器。
     """
@@ -70,7 +81,9 @@ async def group_message_alerter(update: Update, context: ContextTypes.DEFAULT_TY
 
     # 2. 从配置中获取此群组对应的授权用户名
     authorized_username = alerter_config[chat_id_str]
-    logger.debug(f"[Alerter] 群组 {chat_id_str} 命中监听规则，目标用户: @{authorized_username}")
+    logger.debug(
+        f"[Alerter] 群组 {chat_id_str} 命中监听规则，目标用户: @{authorized_username}"
+    )
 
     # 3. 检查消息发送者是否为指定的频道或用户
     sender = message.from_user
@@ -83,7 +96,11 @@ async def group_message_alerter(update: Update, context: ContextTypes.DEFAULT_TY
     if sender and sender.username and sender.username.lower() == auth_user_lower:
         logger.debug(f"[Alerter] 匹配到授权用户: @{sender.username}")
         is_authorized = True
-    elif sender_chat and sender_chat.username and sender_chat.username.lower() == auth_user_lower:
+    elif (
+        sender_chat
+        and sender_chat.username
+        and sender_chat.username.lower() == auth_user_lower
+    ):
         logger.debug(f"[Alerter] 匹配到授权频道: @{sender_chat.username}")
         is_authorized = True
 
@@ -103,7 +120,9 @@ async def group_message_alerter(update: Update, context: ContextTypes.DEFAULT_TY
 
     # 5. 获取第一个被@的用户，并从缓存中查询其ID
     mentioned_username = usernames[0]
-    logger.info(f"[Alerter] 检测到 @{authorized_username} 在群组 {chat_id_str} 中提及了 @{mentioned_username}")
+    logger.info(
+        f"[Alerter] 检测到 @{authorized_username} 在群组 {chat_id_str} 中提及了 @{mentioned_username}"
+    )
 
     real_user_id = None
     if user_cache_manager:
@@ -114,22 +133,34 @@ async def group_message_alerter(update: Update, context: ContextTypes.DEFAULT_TY
 
     # 6. 构建回复消息
     if real_user_id:
-        logger.info(f"[Alerter] 从缓存中找到 @{mentioned_username} 的ID: {real_user_id}")
+        logger.info(
+            f"[Alerter] 从缓存中找到 @{mentioned_username} 的ID: {real_user_id}"
+        )
         user_link = f"tg://user?id={real_user_id}"
     else:
-        logger.warning(f"[Alerter] 无法在缓存中找到 @{mentioned_username} 的ID，将使用用户名链接。")
+        logger.warning(
+            f"[Alerter] 无法在缓存中找到 @{mentioned_username} 的ID，将使用用户名链接。"
+        )
         user_link = f"https://t.me/{mentioned_username}"
 
     reply_text = ALERT_TEMPLATE.format(
-        owner_username=mentioned_username, owner_id=real_user_id if real_user_id else "未知ID", user_link=user_link
+        owner_username=mentioned_username,
+        owner_id=real_user_id if real_user_id else "未知ID",
+        user_link=user_link,
     )
 
     # 7. 发送回复
     try:
-        await message.reply_text(text=reply_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-        logger.info(f"[Alerter] 已成功在群组 {chat_id_str} 中为 @{authorized_username} 的消息发送提醒。")
+        await message.reply_text(
+            text=reply_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True
+        )
+        logger.info(
+            f"[Alerter] 已成功在群组 {chat_id_str} 中为 @{authorized_username} 的消息发送提醒。"
+        )
     except Exception as e:
-        logger.error(f"[Alerter] 在群组 {chat_id_str} 回复提醒消息失败: {e}", exc_info=True)
+        logger.error(
+            f"[Alerter] 在群组 {chat_id_str} 回复提醒消息失败: {e}", exc_info=True
+        )
 
 
 def load(bot_context):
@@ -152,19 +183,34 @@ def load(bot_context):
         logger.error("[Alerter] 无法从 bot_context 中获取 user_cache_manager 实例。")
         return
 
-    # 从配置中获取提醒器配置
-    # 注意：JSON的键是字符串，所以我们需要将TARGET_GROUP_ID转为字符串来匹配
-    alerter_config = {str(k): v for k, v in config.alerter_config.items()}
+    # === 混合配置逻辑 ===
+    # 优先级 1: 使用脚本默认配置
+    alerter_config = DEFAULT_ALERTER_CONFIG.copy()
 
+    # 优先级 2: .env 中的配置覆盖/补充脚本默认配置
+    if hasattr(config, "alerter_config") and config.alerter_config:
+        env_config = {str(k): v for k, v in config.alerter_config.items()}
+        alerter_config.update(env_config)
+        logger.info(
+            f"自定义脚本 [Alerter] 从 .env 加载了 {len(env_config)} 个配置，合并后共 {len(alerter_config)} 个群组"
+        )
+
+    # 配置验证
     if not alerter_config:
-        logger.info("自定义脚本 [Alerter] 未在 .env 中找到 ALERTER_CONFIG 配置，脚本将不会激活。")
+        logger.info(
+            "自定义脚本 [Alerter] 配置为空，脚本将不会激活。"
+            "请在脚本中配置 DEFAULT_ALERTER_CONFIG 或在 .env 中设置 ALERTER_CONFIG"
+        )
         return
+
+    logger.info(f"自定义脚本 [Alerter] 加载成功，最终监听 {len(alerter_config)} 个群组")
 
     # 监听所有包含文本或标题的非命令超级群组消息
     # 使用 group=2 确保在用户缓存处理器之后执行
     handler = MessageHandler(
-        filters.ChatType.SUPERGROUP & (~filters.COMMAND) & (filters.TEXT | filters.CAPTION), group_message_alerter
+        filters.ChatType.SUPERGROUP
+        & (~filters.COMMAND)
+        & (filters.TEXT | filters.CAPTION),
+        group_message_alerter,
     )
     application.add_handler(handler, group=2)
-
-    logger.info(f"自定义脚本 [Alerter] 加载成功，监听 {len(alerter_config)} 个群组。")

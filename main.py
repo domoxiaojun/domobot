@@ -13,6 +13,7 @@
 - 用户缓存管理
 """
 
+import asyncio
 import importlib
 import logging
 import logging.handlers
@@ -22,9 +23,9 @@ import pkgutil
 from telegram import BotCommand, Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     ContextTypes,
 )
-
 
 # 导入环境变量配置
 try:
@@ -37,8 +38,7 @@ except ImportError:
 # ========================================
 # 配置日志系统
 # ========================================
-from utils.config_manager import get_config
-
+from utils.config_manager import get_config, BotConfig
 
 config = get_config()
 
@@ -64,7 +64,7 @@ logging.basicConfig(
 
 # 设置第三方库日志级别
 logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("pyrogram").setLevel(logging.WARNING)
+logging.getLogger("pyrogram").setLevel(logging.WARNING)  # pyrofork 保持了 pyrogram 包名
 logging.getLogger("pyrogram.session.session").setLevel(logging.WARNING)
 logging.getLogger("pyrogram.connection.connection").setLevel(logging.WARNING)
 
@@ -86,18 +86,8 @@ logger.info("=" * 50)
 # ========================================
 # 导入命令模块
 # ========================================
-from commands import (
-    app_store,
-    apple_services,
-    disney_plus,
-    google_play,
-    max,
-    netflix,
-    spotify,
-    steam,
-    weather,
-)
-from commands.rate_command import set_rate_converter
+# 注：所有服务模块（netflix, steam, app_store 等）已通过自动发现机制初始化
+# 无需在此手动导入
 from handlers.user_cache_handler import (
     setup_user_cache_handler,
 )  # 新增：导入用户缓存处理器
@@ -125,17 +115,17 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     if isinstance(update, Update) and update.effective_message:
         try:
             from utils.config_manager import get_config
-            from utils.message_manager import send_and_auto_delete
+            from utils.message_manager import send_message_with_auto_delete
 
             config = get_config()
 
             # 使用自动删除功能发送错误消息
-            await send_and_auto_delete(
+            await send_message_with_auto_delete(
                 context=context,
                 chat_id=update.effective_chat.id,
                 text="❌ 处理请求时发生错误，请稍后重试。\n如果问题持续存在，请联系管理员。",
-                delay=config.auto_delete_delay,
-                command_message_id=(
+                custom_delay=config.auto_delete_delay,
+                reply_to_message_id=(
                     update.effective_message.message_id
                     if hasattr(update.effective_message, "message_id")
                     else None
@@ -145,7 +135,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
             logger.error(f"发送错误消息失败: {e}")  # 记录失败原因而不是静默忽略
 
 
-def load_commands():
+def load_commands() -> None:
     """动态加载并注册所有命令"""
     commands_dir = "commands"
     for _, name, _ in pkgutil.iter_modules([commands_dir]):
@@ -156,7 +146,7 @@ def load_commands():
             logger.error(f"加载命令模块 {name} 失败: {e}")
 
 
-def setup_handlers(application: Application):
+def setup_handlers(application: Application) -> None:
     """设置命令处理器"""
 
     # 动态加载所有命令
@@ -170,15 +160,140 @@ def setup_handlers(application: Application):
 
     application.add_handler(admin_panel_handler.get_conversation_handler())
 
+    # 手动添加 Google Play 回调处理器
+    from commands.google_play import googleplay_callback_handler
+
+    application.add_handler(
+        CallbackQueryHandler(googleplay_callback_handler, pattern="^gp_")
+    )
+
     # 错误处理器
     application.add_error_handler(error_handler)
 
     logger.info("所有命令处理器已设置完成")
 
 
-async def setup_application(application: Application, config) -> None:
+def init_service_bots(
+    application: Application, dependencies: dict
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """动态初始化所有服务机器人
+
+    支持两种自动发现模式：
+    1. *_modules 子目录模式：扫描 commands/*_modules/__init__.py 中的 init_*_bot() 函数
+    2. 命令文件模式：扫描 commands/*.py 中的 init_*_bot() 函数
+
+    Args:
+        application: Telegram Application 实例
+        dependencies: 依赖字典，包含 cache_manager, rate_converter, smart_cache_manager 等
+
+    Returns:
+        tuple[list[str], list[tuple[str, str]]]: (已初始化的服务列表, 失败的服务列表)
+        失败列表格式: [(服务名, 错误信息), ...]
+    """
+    commands_dir = "commands"
+    initialized_services = []
+    failed_services = []
+
+    # 遍历 commands 目录
+    for _, module_name, is_pkg in pkgutil.iter_modules([commands_dir]):
+        service_name = None
+        init_function_name = None
+
+        # 模式 1: *_modules 子目录（优先）
+        if is_pkg and module_name.endswith("_modules"):
+            service_name = module_name.replace("_modules", "")
+            init_function_name = f"init_{service_name}_bot"
+            module_path = f"{commands_dir}.{module_name}"
+
+        # 模式 2: 命令文件中的 init 函数 (单文件模块)
+        elif not is_pkg and not module_name.startswith("_"):
+            service_name = module_name
+            init_function_name = f"init_{service_name}_bot"
+            module_path = f"{commands_dir}.{module_name}"
+
+        # 模式 3: 普通包目录 (如 steam)
+        elif is_pkg and not module_name.startswith("_"):
+            service_name = module_name
+            init_function_name = f"init_{service_name}_bot"
+            module_path = f"{commands_dir}.{module_name}"
+
+        else:
+            continue
+
+        try:
+            # 导入模块
+            module = importlib.import_module(module_path)
+
+            # 检查是否有初始化函数
+            if hasattr(module, init_function_name):
+                init_func = getattr(module, init_function_name)
+
+                # 调用初始化函数，传递标准依赖
+                init_func(
+                    application=application,
+                    cache_manager=dependencies.get("cache_manager"),
+                    rate_converter=dependencies.get("rate_converter"),
+                    smart_cache_manager=dependencies.get("smart_cache_manager"),
+                    task_scheduler=dependencies.get("task_scheduler"),
+                )
+
+                initialized_services.append(service_name)
+                logger.info(f"✅ {service_name} 服务机器人已自动初始化")
+            else:
+                logger.debug(
+                    f"ℹ️  {module_path} 未提供 {init_function_name} 函数，跳过自动初始化"
+                )
+
+        except Exception as e:
+            error_msg = str(e)
+            failed_services.append((service_name, error_msg))
+            logger.error(f"❌ 初始化 {service_name} 服务失败: {e}", exc_info=True)
+
+    return initialized_services, failed_services
+
+
+async def setup_application(application: Application, config: BotConfig) -> None:
     """异步设置应用"""
     logger.info(" 开始初始化机器人应用...")
+
+    # ========================================
+    # 连接重试辅助函数
+    # ========================================
+    async def connect_with_retry(
+        connector,
+        name: str,
+        max_retries: int = 3,
+        delay: float = 2.0,
+    ) -> bool:
+        """
+        带重试机制的连接函数
+
+        Args:
+            connector: 具有 connect() 方法的连接器对象
+            name: 连接器名称（用于日志）
+            max_retries: 最大重试次数
+            delay: 重试间隔（秒）
+
+        Returns:
+            bool: 连接是否成功
+
+        Raises:
+            Exception: 达到最大重试次数后仍失败
+        """
+        for attempt in range(max_retries):
+            try:
+                await connector.connect()
+                logger.info(f"✅ {name} 连接成功")
+                return True
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"⚠️ {name} 连接失败 (尝试 {attempt + 1}/{max_retries}): {e}"
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"❌ {name} 连接失败，已达到最大重试次数: {e}")
+                    raise
 
     # ========================================
     # 第零步：检查并初始化数据库
@@ -203,7 +318,7 @@ async def setup_application(application: Application, config) -> None:
         password=config.redis_password,
         db=config.redis_db,
     )
-    await cache_manager.connect()
+    await connect_with_retry(cache_manager, "Redis 缓存管理器")
 
     # 初始化 MySQL 用户管理器
     user_cache_manager = MySQLUserManager(
@@ -212,68 +327,74 @@ async def setup_application(application: Application, config) -> None:
         database=config.db_name,
         user=config.db_user,
         password=config.db_password,
+        redis_client=cache_manager.redis_client,
+        bot_id=config.bot_id,
     )
-    await user_cache_manager.connect()
+    await connect_with_retry(user_cache_manager, "MySQL 用户管理器")
 
     # 初始化 Redis 统计管理器
     stats_manager = RedisStatsManager(cache_manager.redis_client)
 
     # 初始化汇率转换器
-    rate_converter = RateConverter(config.exchange_rate_api_keys, cache_manager)
+    from utils.constants import DEFAULT_RATE_CACHE_DURATION
+
+    exchange_rate_keys_str = os.getenv("EXCHANGE_RATE_API_KEYS") or os.getenv(
+        "EXCHANGE_RATE_API_KEY", ""
+    )
+    exchange_rate_keys = [
+        k.strip() for k in exchange_rate_keys_str.split(",") if k.strip()
+    ]
+    rate_cache_duration = int(
+        os.getenv("RATE_CACHE_DURATION", DEFAULT_RATE_CACHE_DURATION)
+    )
+
+    rate_converter = RateConverter(
+        exchange_rate_keys, cache_manager, rate_cache_duration
+    )
 
     # 初始化优化的 HTTP 客户端
     from utils.http_client import get_http_client
 
     httpx_client = get_http_client()
 
-    # 初始化 Pyrogram 客户端（用于获取高级用户信息）
-    from utils.pyrogram_client import initialize_pyrogram_client
+    # 初始化 Pyrofork 客户端（用于获取高级用户信息）
+    # Pyrofork 是 Pyrogram 的活跃社区维护版本，支持最新 Telegram API
+    from utils.pyrofork import initialize_pyrofork_client
 
-    pyrogram_initialized = await initialize_pyrogram_client(cache_manager.redis_client)
-    if pyrogram_initialized:
-        logger.info("✅ Pyrogram 客户端已从会话恢复")
+    pyrofork_initialized = await initialize_pyrofork_client(
+        redis_client=cache_manager.redis_client,
+        bot_token=config.bot_token,
+        api_id=config.telegram_api_id or None,
+        api_hash=config.telegram_api_hash or None,
+        bot_id=config.bot_id,
+    )
+    if pyrofork_initialized:
+        logger.info("✅ Pyrofork 客户端初始化成功")
     else:
-        logger.warning("⚠️ Pyrogram 未配置或未登录")
+        logger.warning("⚠️ Pyrofork 未配置或初始化失败")
         logger.warning(
-            "提示：请通过 /admin 面板配置 Pyrogram 以启用高级功能（如查询用户注册日期）"
+            "提示：在 .env 中配置 TELEGRAM_API_ID/TELEGRAM_API_HASH 或通过 /admin 面板配置"
         )
 
-    # 将核心组件存储到 bot_data 中
-    application.bot_data["cache_manager"] = cache_manager
-    application.bot_data["rate_converter"] = rate_converter
-    application.bot_data["httpx_client"] = httpx_client
-    application.bot_data["user_cache_manager"] = user_cache_manager
-    application.bot_data["stats_manager"] = stats_manager
-    logger.info("✅ 核心组件初始化完成")
+    # 初始化价格历史管理器
+    from utils.price_history_manager import PriceHistoryManager
 
-    # ========================================
-    # 第二步：为命令模块注入依赖
-    # ========================================
-    logger.info(" 注入命令模块依赖...")
-    set_rate_converter(rate_converter)
-    steam.set_rate_converter(rate_converter)
-    steam.set_cache_manager(cache_manager)
-    steam.set_steam_checker(cache_manager, rate_converter)
-    netflix.set_dependencies(cache_manager, rate_converter)
-    disney_plus.set_dependencies(cache_manager, rate_converter)
-    spotify.set_dependencies(cache_manager, rate_converter)
-    max.set_dependencies(cache_manager, rate_converter)
-    app_store.set_rate_converter(rate_converter)
-    app_store.set_cache_manager(cache_manager)
-    google_play.set_rate_converter(rate_converter)
-    google_play.set_cache_manager(cache_manager)
-    apple_services.set_rate_converter(rate_converter)
-    weather.set_dependencies(cache_manager, httpx_client)
+    price_history_manager = PriceHistoryManager(
+        host=config.db_host,
+        port=config.db_port,
+        database=config.db_name,
+        user=config.db_user,
+        password=config.db_password,
+    )
+    await price_history_manager.connect()
 
-    # 新增：为需要用户缓存的模块注入依赖
-    # 这里可以根据实际需要为特定命令模块注入用户缓存管理器
-    # 例如：system_commands.set_user_cache_manager(user_cache_manager)
+    # 初始化智能缓存管理器（方案C: Redis 6h + MySQL 24h）
+    from utils.smart_cache_manager import SmartCacheManager
 
-    logger.info("✅ 命令模块依赖注入完成")
+    smart_cache_manager = SmartCacheManager(
+        redis_cache_manager=cache_manager, price_history_manager=price_history_manager
+    )
 
-    # ========================================
-    # 第三步：初始化任务管理系统
-    # ========================================
     logger.info("⚙️ 初始化任务管理系统...")
 
     # 初始化任务管理器
@@ -289,28 +410,44 @@ async def setup_application(application: Application, config) -> None:
     task_scheduler.set_rate_converter(rate_converter)  # 设置汇率转换器
     application.bot_data["task_scheduler"] = task_scheduler
 
+    # 将核心组件存储到 bot_data 中
+    application.bot_data["cache_manager"] = cache_manager
+    application.bot_data["rate_converter"] = rate_converter
+    application.bot_data["httpx_client"] = httpx_client
+    application.bot_data["user_cache_manager"] = user_cache_manager
+    application.bot_data["stats_manager"] = stats_manager
+    application.bot_data["price_history_manager"] = price_history_manager
+    application.bot_data["smart_cache_manager"] = smart_cache_manager
+    application.bot_data["bot_id"] = config.bot_id
+
+    logger.info("✅ 核心组件初始化完成")
+
+    # 使用动态加载机制初始化所有服务机器人
+    logger.info("🤖 开始初始化服务机器人...")
+    dependencies = {
+        "cache_manager": cache_manager,
+        "rate_converter": rate_converter,
+        "smart_cache_manager": smart_cache_manager,
+        "task_scheduler": task_scheduler,
+    }
+    initialized_services, failed_services = init_service_bots(application, dependencies)
+
+    if initialized_services:
+        logger.info(
+            f"✅ 已自动初始化 {len(initialized_services)} 个服务: {', '.join(initialized_services)}"
+        )
+    else:
+        logger.warning("⚠️ 未发现任何服务需要初始化")
+
+    if failed_services:
+        logger.warning(
+            f"⚠️ {len(failed_services)} 个服务初始化失败: "
+            f"{', '.join([f[0] for f in failed_services])}"
+        )
+
     # 根据配置添加定时清理任务
     cleanup_tasks_added = 0
-    if config.spotify_weekly_cleanup:
-        await task_scheduler.add_weekly_cache_cleanup(
-            "spotify", "spotify", weekday=6, hour=5, minute=0
-        )
-        logger.info(" 已配置 Spotify 每周日UTC 5:00 定时清理")
-        cleanup_tasks_added += 1
-
-    if config.disney_weekly_cleanup:
-        await task_scheduler.add_weekly_cache_cleanup(
-            "disney_plus", "disney_plus", weekday=6, hour=5, minute=0
-        )
-        logger.info(" 已配置 Disney+ 每周日UTC 5:00 定时清理")
-        cleanup_tasks_added += 1
-
-    if config.max_weekly_cleanup:
-        await task_scheduler.add_weekly_cache_cleanup(
-            "max", "max", weekday=6, hour=5, minute=0
-        )
-        logger.info(" 已配置 HBO Max 每周日UTC 5:00 定时清理")
-        cleanup_tasks_added += 1
+    # 注意：各服务的定时清理任务已移至各模块初始化函数中注册
 
     # 启动任务调度器（包含汇率刷新任务）
     task_scheduler.start()
@@ -393,6 +530,47 @@ async def setup_application(application: Application, config) -> None:
         logger.error(f"❌ 设置机器人命令菜单失败: {e}")
 
     # ========================================
+    # 第六步半：设置机器人描述
+    # ========================================
+    logger.info("📝 设置机器人描述...")
+
+    try:
+        # 读取描述配置
+        description = os.getenv("BOT_DESCRIPTION", "")
+        short_description = os.getenv("BOT_SHORT_DESCRIPTION", "")
+
+        # 将 \n 转换为真实的换行符
+        if description:
+            description = description.replace("\\n", "\n")
+        if short_description:
+            short_description = short_description.replace("\\n", "\n")
+
+        # 设置完整描述
+        if description:
+            await application.bot.set_my_description(description=description)
+            logger.info(f"✅ Bot 完整描述设置成功: {description[:50]}...")
+        else:
+            logger.warning("⚠️  未配置 Bot 描述 (BOT_DESCRIPTION)")
+
+        # 设置简短描述
+        if short_description:
+            await application.bot.set_my_short_description(
+                short_description=short_description
+            )
+            logger.info(f"✅ Bot 简短描述设置成功: {short_description}")
+        else:
+            logger.warning("⚠️  未配置 Bot 简短描述 (BOT_SHORT_DESCRIPTION)")
+
+        logger.info("📝 Bot 描述设置完成")
+
+    except Exception as e:
+        logger.error(f"❌ 设置 Bot 描述失败: {e}")
+        import traceback
+
+        logger.error(traceback.format_exc())
+        # 不影响 Bot 启动，继续执行
+
+    # ========================================
     # 第七步：加载自定义脚本（可选）
     # ========================================
     if config.load_custom_scripts:
@@ -427,27 +605,20 @@ async def setup_application(application: Application, config) -> None:
 
 
 async def cleanup_application(application: Application) -> None:
-    """清理应用资源"""
+    """清理应用资源
+
+    关闭顺序：
+    1. 先停止调度器（阻止新任务产生）
+    2. 等待正在执行的任务完成
+    3. 关闭网络连接
+    4. 关闭任务管理器
+    5. 关闭数据库连接
+    """
     logger.info(" 开始清理应用资源...")
 
     try:
         # ========================================
-        # 第一步：关闭网络连接
-        # ========================================
-        # 停止 Pyrogram 客户端
-        from utils.pyrogram_client import stop_pyrogram_client
-
-        await stop_pyrogram_client()
-        logger.info("✅ Pyrogram 客户端已停止")
-
-        # 关闭 httpx 客户端
-        from utils.http_client import close_global_client
-
-        await close_global_client()
-        logger.info("✅ httpx客户端已关闭")
-
-        # ========================================
-        # 第二步：停止调度器
+        # 第一步：停止调度器（先阻止新任务产生）
         # ========================================
         if "task_scheduler" in application.bot_data:
             application.bot_data["task_scheduler"].stop()
@@ -457,8 +628,35 @@ async def cleanup_application(application: Application) -> None:
             application.bot_data["message_delete_scheduler"].stop()
             logger.info("✅ 消息删除调度器已停止")
 
+        # 等待正在执行的任务完成
+        await asyncio.sleep(0.5)
+
         # ========================================
-        # 第三步：关闭任务管理器
+        # 第二步：等待后台任务完成（SmartCacheManager）
+        # ========================================
+        if "smart_cache_manager" in application.bot_data:
+            await application.bot_data["smart_cache_manager"].wait_for_background_tasks(
+                timeout=10.0
+            )
+            logger.info("✅ 后台缓存任务已完成")
+
+        # ========================================
+        # 第三步：关闭网络连接
+        # ========================================
+        # 停止 Pyrofork 客户端
+        from utils.pyrofork import stop_pyrofork_client
+
+        await stop_pyrofork_client()
+        logger.info("✅ Pyrofork 客户端已停止")
+
+        # 关闭 httpx 客户端
+        from utils.http_client import close_global_client
+
+        await close_global_client()
+        logger.info("✅ httpx客户端已关闭")
+
+        # ========================================
+        # 第四步：关闭任务管理器
         # ========================================
         from utils.task_manager import shutdown_task_manager
 
@@ -466,7 +664,7 @@ async def cleanup_application(application: Application) -> None:
         logger.info("✅ 任务管理器已关闭")
 
         # ========================================
-        # 第四步：关闭数据库连接
+        # 第五步：关闭数据库连接
         # ========================================
         if "cache_manager" in application.bot_data:
             await application.bot_data["cache_manager"].close()
@@ -474,7 +672,11 @@ async def cleanup_application(application: Application) -> None:
 
         if "user_cache_manager" in application.bot_data:
             await application.bot_data["user_cache_manager"].close()
-            logger.info("✅ MySQL 连接已关闭")
+            logger.info("✅ MySQL用户管理器已关闭")
+
+        if "price_history_manager" in application.bot_data:
+            await application.bot_data["price_history_manager"].close()
+            logger.info("✅ 价格历史管理器已关闭")
 
         logger.info(" 应用资源清理完成")
 
@@ -497,17 +699,13 @@ def main() -> None:
         return
 
     # 验证超级管理员ID
-    super_admin_id = config.super_admin_id
-    if not super_admin_id:
+    super_admin_ids = config.super_admin_ids
+    if not super_admin_ids:
         logger.error("❌ 未设置 SUPER_ADMIN_ID 环境变量")
         return
 
-    try:
-        int(super_admin_id)
-        logger.info(f"✅ 超级管理员ID: {super_admin_id}")
-    except ValueError:
-        logger.error("❌ SUPER_ADMIN_ID 必须是数字")
-        return
+    logger.info(f"✅ 超级管理员ID: {super_admin_ids}")
+    logger.info(f"✅ Bot ID: {config.bot_id}")
 
     # 验证数据库配置
     if not config.db_host or not config.db_user or not config.db_name:
@@ -528,7 +726,7 @@ def main() -> None:
     application = Application.builder().token(bot_token).build()
 
     # 设置异步初始化和清理回调
-    async def init_and_run(app):
+    async def init_and_run(app: Application) -> None:
         await setup_application(app, config)
         logger.info("✅ 机器人启动完成，开始服务...")
 

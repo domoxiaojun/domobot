@@ -11,7 +11,6 @@ from utils.message_manager import delete_user_command, send_help
 # 导入权限相关模块
 from utils.permissions import Permission, get_user_permission
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -38,7 +37,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 - `/steam <游戏名>`: 查询Steam游戏在默认地区的价格。
 - `/steam <游戏名> [国家代码]`: 在指定的一个或多个国家/地区查询游戏价格。
 - `/steamb <捆绑包名/ID>`: 查询Steam捆绑包的价格和内容。
-- `/steams <关键词>`: 综合搜索游戏和捆绑包。
 
 📺 *流媒体服务价格*
 - `/nf [国家代码]`: 查询Netflix订阅价格 (默认查询热门地区)。
@@ -86,8 +84,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 - `/ds_cleancache`: 清理Disney+缓存。
 - `/sp_cleancache`: 清理Spotify缓存。
 - `/gp_cleancache`: 清理Google Play缓存。
+- `/gp_clearitem <包名> [国家...]`: 清理Google Play指定包名缓存（含MySQL）。
 - `/app_cleancache`: 清理App Store缓存。
+- `/app_clearitem <AppID> [国家...]`: 清理App Store指定AppID缓存（含MySQL）。
 - `/steamcc`: 清理Steam相关缓存。
+- `/steam_clearitem <AppID|bundle_ID> [国家...]`: 清理Steam指定条目缓存（含MySQL）。
 - `/aps_cleancache`: 清理Apple服务缓存。
 
 💡 *管理技巧:*
@@ -124,8 +125,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 📞 *联系我们:*
 如需申请使用权限或遇到问题，请联系机器人管理员。"""
 
-    await send_help(context, update.message.chat_id, foldable_text_with_markdown_v2(help_text), parse_mode="MarkdownV2")
-    await delete_user_command(context, update.message.chat_id, update.message.message_id)
+    await send_help(
+        context,
+        update.message.chat_id,
+        foldable_text_with_markdown_v2(help_text),
+        parse_mode="MarkdownV2",
+    )
+    await delete_user_command(
+        context, update.message.chat_id, update.message.message_id
+    )
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -163,8 +171,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 开始探索吧! 🎉"""
 
-    await send_help(context, update.message.chat_id, foldable_text_with_markdown_v2(welcome_text), parse_mode="MarkdownV2")
-    await delete_user_command(context, update.message.chat_id, update.message.message_id)
+    await send_help(
+        context,
+        update.message.chat_id,
+        foldable_text_with_markdown_v2(welcome_text),
+        parse_mode="MarkdownV2",
+    )
+    await delete_user_command(
+        context, update.message.chat_id, update.message.message_id
+    )
 
 
 # Register commands
@@ -177,5 +192,10 @@ command_factory.register_command(
     use_rate_limit=False,
 )
 command_factory.register_command(
-    "help", help_command, permission=Permission.USER, description="显示帮助信息", use_retry=False, use_rate_limit=False
+    "help",
+    help_command,
+    permission=Permission.USER,
+    description="显示帮助信息",
+    use_retry=False,
+    use_rate_limit=False,
 )

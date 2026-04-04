@@ -1,7 +1,7 @@
 # type: ignore
 import logging
 from datetime import datetime
-from typing import Optional
+
 from telegram import Update, Message
 from telegram.ext import ContextTypes
 
@@ -9,7 +9,8 @@ from utils.command_factory import command_factory
 from utils.formatter import foldable_text_with_markdown_v2
 from utils.message_manager import delete_user_command, send_search_result
 from utils.permissions import Permission
-from utils.pyrogram_client import get_user_full_info
+from utils.pyrofork import get_user_full_info
+from utils.pyrofork.session import REDIS_KEY_USER_REG_DATE_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -84,18 +85,20 @@ def format_timestamp(timestamp) -> str:
 
 async def format_user_info_with_advanced(
     user,
+    context: ContextTypes.DEFAULT_TYPE,
     prefix: str = "",
-    chat_id: Optional[int] = None,
-    message_id: Optional[int] = None,
+    bot=None,
+    force_refresh: bool = False,
 ) -> str:
     """
     格式化用户信息（包含高级信息）。
 
     Args:
         user: Telegram User 对象
+        context: Telegram Context 对象（用于获取依赖）
         prefix: 字段名称前缀（如 "发送者"、"被回复用户" 等）
-        chat_id: 群组/频道 ID (可选,用于从消息中获取用户信息)
-        message_id: 消息 ID (可选,用于从消息中获取用户信息)
+        bot: Telegram Bot 实例 (可选,用于从头像获取 DC)
+        force_refresh: 强制跳过缓存直接查询 Raw API（/cinfo 使用）
 
     Returns:
         格式化的用户信息文本
@@ -104,6 +107,7 @@ async def format_user_info_with_advanced(
         return ""
 
     info_lines = []
+    bottom_tips = []  # 收集需要显示在最下面的提示
 
     # 用户 ID
     info_lines.append(f"{prefix}ID: `{user.id}`")
@@ -127,55 +131,63 @@ async def format_user_info_with_advanced(
         return "\n".join(info_lines)  # 机器人不显示高级信息
 
     # 获取高级用户信息（注册日期、账号年龄、DC、Premium 状态）
-    logger.info(f"开始获取用户 {user.id} 的高级信息...")
+    logger.debug(f"开始获取用户 {user.id} 的高级信息...")
     try:
-        advanced_info = await get_user_full_info(user.id, chat_id, message_id, user)
+        # 从 context.bot_data 获取依赖
+        mysql_manager = context.bot_data.get("user_cache_manager")
+        cache_manager = context.bot_data.get("cache_manager")
+        redis_client = cache_manager.redis_client if cache_manager else None
+
+        advanced_info = await get_user_full_info(
+            user_id=user.id,
+            redis_client=redis_client,
+            user=user,
+            bot=bot,
+            mysql_manager=mysql_manager,
+            force_refresh=force_refresh,
+        )
         if advanced_info:
-            logger.info(f"成功获取用户 {user.id} 的高级信息: {advanced_info.keys()}")
+            logger.debug(f"成功获取用户 {user.id} 的高级信息: {advanced_info.keys()}")
 
             # Premium 状态
             if "is_premium" in advanced_info and advanced_info["is_premium"]:
                 info_lines.append(f"{prefix}Premium 用户: ⭐ 是")
                 logger.debug("添加 Premium 状态: 是")
 
-            # 注册日期（显示年月 + 缓存状态）- 来自 regdate_clone_bot
+            # 注册时间 (根据数据来源显示不同图标)
             if (
-                "registration_date" in advanced_info
-                and advanced_info["registration_date"]
+                "registration_year" in advanced_info
+                and advanced_info["registration_year"]
             ):
-                reg_date = advanced_info["registration_date"]
-                is_cached = advanced_info.get("cached", False)
+                year = advanced_info["registration_year"]
+                month = advanced_info["registration_month"]
+                source = advanced_info.get("registration_source", "unknown")
 
-                # 缓存标记
-                cache_marker = " 📦" if is_cached else ""
+                # 根据数据来源显示不同的标记
+                if source == "peersettings":
+                    marker = " (官方)"  # 官方数据
+                elif source == "id_estimation":
+                    marker = " (ID估算)"  # 推测数据
+                    # 添加提示到底部（引导用户私聊登录账号以建立 peer 关系）
+                    from utils.pyrofork.client import get_logged_in_username
 
-                info_lines.append(
-                    f"{prefix}注册日期(regdate_clone_bot): {reg_date.strftime('%Y年%m月')}"
-                    f"{cache_marker}"
-                )
-                logger.debug(
-                    f"添加注册日期(regdate_clone_bot): {reg_date} (缓存: {is_cached})"
-                )
+                    logged_in_username = get_logged_in_username()
+                    if logged_in_username:
+                        bottom_tips.append(
+                            f"💡 要获取准确的注册时间，请先[私聊 @{logged_in_username}]"
+                            f"(https://t.me/{logged_in_username})发送任意消息，"
+                            f"然后使用 /cinfo 重新查询"
+                        )
+                    else:
+                        bot_username = context.bot.username or "bot"
+                        bottom_tips.append(
+                            f"💡 要获取准确的注册时间，请[点击私聊](https://t.me/{bot_username})发送 /info"
+                        )
+                else:
+                    marker = " (ID估算)"  # 未知来源，默认标记为估算
 
-            # 注册日期（显示完整日期 + 缓存状态）- 来自 SmartUtilBot
-            if (
-                "smartutil_reg_date" in advanced_info
-                and advanced_info["smartutil_reg_date"]
-            ):
-                smartutil_date = advanced_info["smartutil_reg_date"]
-                is_cached = advanced_info.get("cached", False)
-
-                # 缓存标记
-                cache_marker = " 📦" if is_cached else ""
-
-                info_lines.append(
-                    f"{prefix}注册日期(SmartUtilBot): {smartutil_date.strftime('%Y年%m月%d日')}"
-                    f"{cache_marker}"
-                )
-                logger.debug(
-                    f"添加注册日期(SmartUtilBot): {smartutil_date} (缓存: {is_cached})"
-                )
-
+                info_lines.append(f"{prefix}注册时间: {year}年{month}月{marker}")
+                logger.debug(f"添加注册时间: {year}年{month}月 (来源: {source})")
             # 账号年龄（显示年月，不显示天数）
             if "account_age_years" in advanced_info:
                 age_years = advanced_info.get("account_age_years", 0)
@@ -197,13 +209,102 @@ async def format_user_info_with_advanced(
                 dc_location = advanced_info.get("dc_location", f"Unknown DC{dc_id}")
                 info_lines.append(f"{prefix}数据中心: DC{dc_id} ({dc_location})")
                 logger.debug(f"添加数据中心: DC{dc_id}")
+
+            # PeerSettings 附加字段（仅官方数据时才有值）
+            if advanced_info.get("registration_source") == "peersettings":
+                phone_country = advanced_info.get("phone_country")
+                name_change_date = advanced_info.get("name_change_date")
+                photo_change_date = advanced_info.get("photo_change_date")
+
+                if phone_country:
+                    info_lines.append(f"{prefix}手机地区: {phone_country}")
+                if name_change_date:
+                    info_lines.append(
+                        f"{prefix}改名时间: {format_timestamp(name_change_date)}"
+                    )
+                if photo_change_date:
+                    info_lines.append(
+                        f"{prefix}换头像时间: {format_timestamp(photo_change_date)}"
+                    )
         else:
             logger.warning(f"未获取到用户 {user.id} 的高级信息（返回值为空）")
     except Exception as e:
         # 如果获取高级信息失败，不显示，但不中断整个流程
         logger.error(f"获取用户 {user.id} 高级信息失败: {e}", exc_info=True)
 
+    # 在最后添加底部提示
+    if bottom_tips:
+        info_lines.append("")  # 空行分隔
+        info_lines.extend(bottom_tips)
+
     return "\n".join(info_lines)
+
+
+# ============ 公共构建函数 ============
+
+
+async def _build_info_blocks(
+    chat,
+    message: Message,
+    user,
+    context: ContextTypes.DEFAULT_TYPE,
+    bot,
+    *,
+    cache_cleared: bool = False,
+) -> list:
+    """构建信息展示块（info 和 cinfo 共用）"""
+    info_blocks = []
+
+    # ━━━━━━━━ 📱 对话信息 ━━━━━━━━
+    chat_info = ["━━━━━━━━ 📱 对话信息 ━━━━━━━━"]
+    id_label = "对话 ID" if chat.type == "private" else "群组 ID"
+    chat_info.append(f"{id_label}: `{chat.id}`")
+    chat_info.append(f"对话类型: {CHAT_TYPE_MAP.get(chat.type, chat.type)}")
+    if chat.title:
+        chat_info.append(f"对话标题: {chat.title}")
+    info_blocks.append("\n".join(chat_info))
+
+    # ━━━━━━━━ 🔁 / 👤 用户信息 ━━━━━━━━
+    if message.reply_to_message:
+        reply_msg = message.reply_to_message
+        reply_info = ["━━━━━━━━ 🔁 回复消息信息 ━━━━━━━━"]
+        if cache_cleared:
+            reply_info.append("🔄 已清除缓存,重新查询中...")
+        reply_info.append(f"消息 ID: `{reply_msg.message_id}`")
+        reply_info.append(f"消息类型: {get_message_type(reply_msg)}")
+
+        if reply_msg.from_user:
+            reply_info.append("")  # 空行分隔
+            user_text = await format_user_info_with_advanced(
+                reply_msg.from_user,
+                context,
+                prefix="",
+                bot=bot,
+                force_refresh=cache_cleared,
+            )
+            reply_info.append(user_text)
+
+        reply_info.append("")  # 空行分隔
+        reply_info.append(f"发送时间: {format_timestamp(reply_msg.date)}")
+        if reply_msg.edit_date:
+            reply_info.append(f"编辑时间: {format_timestamp(reply_msg.edit_date)}")
+        if reply_msg.chat and reply_msg.chat.id != chat.id:
+            reply_info.append(f"来源对话 ID: `{reply_msg.chat.id}`")
+
+        info_blocks.append("\n".join(reply_info))
+    else:
+        sender_info = ["━━━━━━━━ 👤 用户信息 ━━━━━━━━"]
+        user_text = await format_user_info_with_advanced(
+            user,
+            context,
+            prefix="",
+            bot=bot,
+            force_refresh=cache_cleared,
+        )
+        sender_info.append(user_text)
+        info_blocks.append("\n".join(sender_info))
+
+    return info_blocks
 
 
 # ============ 命令函数 ============
@@ -221,49 +322,7 @@ async def get_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not message or not chat or not user:
         return
 
-    info_blocks = []
-
-    # ━━━━━━━━ 📱 对话信息 ━━━━━━━━
-    chat_info = ["━━━━━━━━ 📱 对话信息 ━━━━━━━━"]
-    chat_info.append(f"群组 ID: `{chat.id}`")
-    chat_info.append(f"对话类型: {CHAT_TYPE_MAP.get(chat.type, chat.type)}")
-    if chat.title:
-        chat_info.append(f"对话标题: {chat.title}")
-    info_blocks.append("\n".join(chat_info))
-
-    # ━━━━━━━━ 🔁 回复消息信息 ━━━━━━━━（如果有）
-    if message.reply_to_message:
-        reply_msg = message.reply_to_message
-        reply_info = ["━━━━━━━━ 🔁 回复消息信息 ━━━━━━━━"]
-        reply_info.append(f"消息 ID: `{reply_msg.message_id}`")
-        reply_info.append(f"消息类型: {get_message_type(reply_msg)}")
-
-        # 发送者信息（包含高级信息）
-        if reply_msg.from_user:
-            reply_info.append("")  # 空行分隔
-            user_info = await format_user_info_with_advanced(
-                reply_msg.from_user,
-                prefix="",
-                chat_id=chat.id,
-                message_id=reply_msg.message_id,
-            )
-            reply_info.append(user_info)
-
-        # 消息时间
-        reply_info.append("")  # 空行分隔
-        reply_info.append(f"发送时间: {format_timestamp(reply_msg.date)}")
-
-        # 编辑时间（如果有）
-        if reply_msg.edit_date:
-            reply_info.append(f"编辑时间: {format_timestamp(reply_msg.edit_date)}")
-
-        # 来源对话（如果不同）
-        if reply_msg.chat and reply_msg.chat.id != chat.id:
-            reply_info.append(f"来源对话 ID: `{reply_msg.chat.id}`")
-
-        info_blocks.append("\n".join(reply_info))
-
-    # 组装完整文本
+    info_blocks = await _build_info_blocks(chat, message, user, context, context.bot)
     reply_text = "\n\n".join(info_blocks)
 
     await send_search_result(
@@ -317,15 +376,15 @@ async def clear_and_get_info_command(
 
     target_user_id = reply_msg.from_user.id
 
-    # 清除该用户的缓存
+    # 清除该用户的 Redis 缓存
+    # ⚠️ 注意：仅清除 Redis 缓存，不清除 MySQL 中的官方数据
     try:
-        # 从 bot_data 中获取 cache_manager
         cache_manager = context.bot_data.get("cache_manager")
         if cache_manager and cache_manager.redis_client:
-            cache_key = f"user_registration_date:{target_user_id}"
+            cache_key = f"{REDIS_KEY_USER_REG_DATE_PREFIX}{target_user_id}"
             deleted = await cache_manager.redis_client.delete(cache_key)
             logger.info(
-                f"用户 {user.id} 清除了用户 {target_user_id} 的缓存 (结果: {deleted})"
+                f"用户 {user.id} 清除了用户 {target_user_id} 的 Redis 缓存 (结果: {deleted})"
             )
         else:
             logger.warning("Redis 客户端未初始化,无法清除缓存")
@@ -333,47 +392,9 @@ async def clear_and_get_info_command(
         logger.error(f"清除用户 {target_user_id} 的缓存失败: {e}", exc_info=True)
 
     # 重新查询信息
-    info_blocks = []
-
-    # ━━━━━━━━ 📱 对话信息 ━━━━━━━━
-    chat_info = ["━━━━━━━━ 📱 对话信息 ━━━━━━━━"]
-    chat_info.append(f"群组 ID: `{chat.id}`")
-    chat_info.append(f"对话类型: {CHAT_TYPE_MAP.get(chat.type, chat.type)}")
-    if chat.title:
-        chat_info.append(f"对话标题: {chat.title}")
-    info_blocks.append("\n".join(chat_info))
-
-    # ━━━━━━━━ 🔁 回复消息信息 ━━━━━━━━
-    reply_info = ["━━━━━━━━ 🔁 回复消息信息 ━━━━━━━━"]
-    reply_info.append("🔄 已清除缓存,重新查询中...")
-    reply_info.append(f"消息 ID: `{reply_msg.message_id}`")
-    reply_info.append(f"消息类型: {get_message_type(reply_msg)}")
-
-    # 发送者信息（包含高级信息）
-    reply_info.append("")  # 空行分隔
-    user_info = await format_user_info_with_advanced(
-        reply_msg.from_user,
-        prefix="",
-        chat_id=chat.id,
-        message_id=reply_msg.message_id,
+    info_blocks = await _build_info_blocks(
+        chat, message, user, context, context.bot, cache_cleared=True
     )
-    reply_info.append(user_info)
-
-    # 消息时间
-    reply_info.append("")  # 空行分隔
-    reply_info.append(f"发送时间: {format_timestamp(reply_msg.date)}")
-
-    # 编辑时间（如果有）
-    if reply_msg.edit_date:
-        reply_info.append(f"编辑时间: {format_timestamp(reply_msg.edit_date)}")
-
-    # 来源对话（如果不同）
-    if reply_msg.chat and reply_msg.chat.id != chat.id:
-        reply_info.append(f"来源对话 ID: `{reply_msg.chat.id}`")
-
-    info_blocks.append("\n".join(reply_info))
-
-    # 组装完整文本
     reply_text = "\n\n".join(info_blocks)
 
     await send_search_result(

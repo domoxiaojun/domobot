@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -56,7 +55,9 @@ class CustomScriptLoader:
                 if success:
                     success_count += 1
             except Exception as e:
-                logger.error(f"加载脚本 {script_file.name} 时发生未预期错误: {e}", exc_info=True)
+                logger.error(
+                    f"加载脚本 {script_file.name} 时发生未预期错误: {e}", exc_info=True
+                )
 
         logger.info(f"自定义脚本加载完成: {success_count}/{len(script_files)} 成功")
         return success_count == len(script_files)
@@ -76,7 +77,9 @@ class CustomScriptLoader:
 
         return script_files
 
-    def _load_single_script(self, script_file: Path, bot_context: dict[str, Any] | None = None) -> bool:
+    def _load_single_script(
+        self, script_file: Path, bot_context: dict[str, Any] | None = None
+    ) -> bool:
         """
         加载单个脚本文件
 
@@ -93,7 +96,9 @@ class CustomScriptLoader:
             logger.info(f"正在加载自定义脚本: {script_name}")
 
             # 创建模块规范
-            spec = importlib.util.spec_from_file_location(f"custom_scripts.{script_name}", script_file)
+            spec = importlib.util.spec_from_file_location(
+                f"custom_scripts.{script_name}", script_file
+            )
 
             if spec is None or spec.loader is None:
                 logger.error(f"无法创建脚本模块规范: {script_name}")
@@ -124,7 +129,11 @@ class CustomScriptLoader:
             script_info = self._get_script_info(module, script_name)
 
             # 存储已加载的脚本
-            self.loaded_scripts[script_name] = {"module": module, "file_path": script_file, "info": script_info}
+            self.loaded_scripts[script_name] = {
+                "module": module,
+                "file_path": script_file,
+                "info": script_info,
+            }
 
             logger.info(f"✅ 成功加载自定义脚本: {script_name}")
             if script_info.get("description"):
@@ -138,7 +147,12 @@ class CustomScriptLoader:
 
     def _get_script_info(self, module: Any, script_name: str) -> dict[str, str]:
         """获取脚本信息"""
-        default_info = {"name": script_name, "version": "未知", "description": "无描述", "author": "未知"}
+        default_info = {
+            "name": script_name,
+            "version": "未知",
+            "description": "无描述",
+            "author": "未知",
+        }
 
         try:
             # 尝试调用get_script_info函数
@@ -155,7 +169,9 @@ class CustomScriptLoader:
         """获取已加载的脚本列表"""
         return self.loaded_scripts.copy()
 
-    def reload_script(self, script_name: str, bot_context: dict[str, Any] | None = None) -> bool:
+    def reload_script(
+        self, script_name: str, bot_context: dict[str, Any] | None = None
+    ) -> bool:
         """
         重新加载指定脚本
 

@@ -10,7 +10,6 @@ import os
 import shutil
 from datetime import datetime, timedelta
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -72,7 +71,9 @@ class LogManager:
     def _compress_file(self, file_path: str) -> None:
         """压缩文件"""
         try:
-            with open(file_path, "rb") as f_in, gzip.open(f"{file_path}.gz", "wb") as f_out:
+            with open(file_path, "rb") as f_in, gzip.open(
+                f"{file_path}.gz", "wb"
+            ) as f_out:
                 shutil.copyfileobj(f_in, f_out)
 
             # 删除原文件
@@ -108,7 +109,12 @@ class LogManager:
 
     def get_log_stats(self) -> dict:
         """获取日志统计信息"""
-        stats = {"current_logs": 0, "current_size_mb": 0.0, "archive_files": 0, "archive_size_mb": 0.0}
+        stats = {
+            "current_logs": 0,
+            "current_size_mb": 0.0,
+            "archive_files": 0,
+            "archive_size_mb": 0.0,
+        }
 
         try:
             # 统计当前日志
@@ -148,7 +154,9 @@ class LogManager:
             # 清理旧归档
             result["cleaned"] = self.cleanup_old_archives(cleanup_days)
 
-            logger.info(f"日志维护完成: 归档 {result['archived']} 个文件, 清理 {result['cleaned']} 个文件")
+            logger.info(
+                f"日志维护完成: 归档 {result['archived']} 个文件, 清理 {result['cleaned']} 个文件"
+            )
 
         except Exception as e:
             result["error"] = str(e)
@@ -167,11 +175,11 @@ def schedule_log_maintenance():
         import schedule
 
         # 每周日凌晨2点执行日志维护
-        schedule.every().sunday.at("02:00").do(log_manager.run_maintenance, archive_days=7, cleanup_days=90)
+        schedule.every().sunday.at("02:00").do(
+            log_manager.run_maintenance, archive_days=7, cleanup_days=90
+        )
 
         logger.info("日志维护任务已调度: 每周日 02:00 执行")
 
     except Exception as e:
         logger.error(f"调度日志维护任务失败: {e}")
-
-

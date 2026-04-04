@@ -11,9 +11,48 @@ from typing import Dict, Optional
 import httpx
 from bs4 import BeautifulSoup
 
+from utils.constants import HTTP_TIMEOUT_MEDIUM
+
 from .constants import MINIMAL_HEADERS, WEB_SEARCH_LIMIT
 
 logger = logging.getLogger(__name__)
+
+# iTunes Lookup API 批量查询上限
+_LOOKUP_BATCH_SIZE = 50
+
+
+async def _itunes_lookup(app_ids: list[int], country: str = "us") -> dict[int, dict]:
+    """批量查询 iTunes Lookup API 获取应用元数据（图标、真实名称、开发者等）
+
+    Args:
+        app_ids: App ID 列表
+        country: 国家代码
+
+    Returns:
+        {app_id: {trackName, artistName, artworkUrl100, ...}} 映射
+    """
+    if not app_ids:
+        return {}
+
+    ids_str = ",".join(str(aid) for aid in app_ids[:_LOOKUP_BATCH_SIZE])
+    url = "https://itunes.apple.com/lookup"
+    params = {"id": ids_str, "country": country}
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, params=params, timeout=HTTP_TIMEOUT_MEDIUM)
+            resp.raise_for_status()
+            data = resp.json()
+
+        result = {}
+        for item in data.get("results", []):
+            track_id = item.get("trackId")
+            if track_id:
+                result[track_id] = item
+        return result
+    except Exception as e:
+        logger.warning(f"iTunes Lookup API 失败: {type(e).__name__}: {e}")
+        return {}
 
 
 class AppStoreWebAPI:
@@ -34,9 +73,11 @@ class AppStoreWebAPI:
         url = f"https://apps.apple.com/{country_code.lower()}/app/id{app_id}"
 
         try:
-            async with httpx.AsyncClient(follow_redirects=True, verify=False) as client:
+            async with httpx.AsyncClient(follow_redirects=True) as client:
                 logger.info(f"获取应用页面: {url}")
-                response = await client.get(url, headers=MINIMAL_HEADERS, timeout=12)
+                response = await client.get(
+                    url, headers=MINIMAL_HEADERS, timeout=HTTP_TIMEOUT_MEDIUM
+                )
                 response.raise_for_status()
                 return response.text
 
@@ -63,123 +104,122 @@ class AppStoreWebAPI:
         limit: int = WEB_SEARCH_LIMIT,
     ) -> Dict:
         """
-        使用 App Store 网页搜索应用（覆盖率比 iTunes API 更高）
+        使用 App Store 网页搜索应用，再通过 iTunes Lookup API 补齐元数据
+
+        流程：
+        1. 网页搜索提取 App ID 列表（覆盖率高于 iTunes Search API）
+        2. 批量调用 iTunes Lookup API 获取图标、真实名称、开发者等
 
         Args:
             query: 搜索关键词
             country: 国家代码 (默认 us)
             platform: 平台类型 (iphone, ipad, mac, tv, watch, vision)
-            limit: 返回结果数量（仅作参考，实际由网页返回数量决定）
+            limit: 返回结果数量
 
         Returns:
             包含搜索结果的字典
         """
-        url = f"https://apps.apple.com/{country}/{platform}/search"
+        url = f"https://apps.apple.com/{country.lower()}/{platform}/search"
         params = {"term": query}
 
         try:
-            async with httpx.AsyncClient(follow_redirects=True, verify=False) as client:
+            async with httpx.AsyncClient(follow_redirects=True) as client:
                 logger.info(
                     f"网页搜索: query='{query}', country={country}, platform={platform}"
                 )
 
                 response = await client.get(
-                    url, params=params, headers=MINIMAL_HEADERS, timeout=15
+                    url,
+                    params=params,
+                    headers=MINIMAL_HEADERS,
+                    timeout=HTTP_TIMEOUT_MEDIUM,
                 )
                 response.raise_for_status()
 
                 html_content = response.text
                 soup = BeautifulSoup(html_content, "lxml")
 
-                # 调试：记录 HTML 大小和链接数量
-                logger.info(f"收到 HTML: {len(html_content)} 字节")
-
-                # 调试：保存 HTML 到文件用于调试
-                import os
-                debug_file = "/tmp/appstore_search_debug.html"
-                try:
-                    with open(debug_file, "w", encoding="utf-8") as f:
-                        f.write(html_content)
-                    logger.info(f"已保存 HTML 到: {debug_file}")
-                except Exception as e:
-                    logger.warning(f"无法保存调试 HTML: {e}")
-
-                # 提取应用链接
-                results = []
+                # 从 HTML 提取 App ID 列表
+                app_ids = []
                 seen_ids = set()
 
-                # 查找所有应用链接（格式：/us/app/{name}/id{number}）
                 app_links = soup.select('a[href*="/app/"]')
-                logger.info(f"找到 {len(app_links)} 个包含 /app/ 的链接")
-
-                # 调试：如果没找到，尝试查看所有链接
-                if not app_links:
-                    all_links = soup.find_all("a", href=True)
-                    logger.info(f"HTML 中共有 {len(all_links)} 个链接")
-                    # 显示前 10 个链接作为样本
-                    for i, link in enumerate(all_links[:10]):
-                        logger.info(f"  样本链接 {i+1}: {link.get('href')[:100]}")
 
                 for link in app_links:
                     href = link.get("href", "")
-
-                    # 提取 App ID（匹配 /app/{name}/id{number} 或 /app/id{number} 格式）
                     match = re.search(r"/app/[^/]+/id(\d+)", href)
                     if not match:
-                        # 尝试备用格式 /app/id{number}
                         match = re.search(r"/app/id(\d+)", href)
                         if not match:
                             continue
 
-                    app_id = match.group(1)
-
-                    # 去重
+                    app_id = int(match.group(1))
                     if app_id in seen_ids:
                         continue
                     seen_ids.add(app_id)
+                    app_ids.append(app_id)
 
-                    # 提取应用名称（从 h3.svelte-pjlfuj 获取干净的名称）
-                    h3_tag = link.find("h3", class_="svelte-pjlfuj")
-                    if h3_tag:
-                        app_name = h3_tag.get_text(strip=True)
-                    else:
-                        app_name = f"App {app_id}"
+                    if len(app_ids) >= limit:
+                        break
 
-                    # 构建完整 URL
-                    full_url = (
-                        f"https://apps.apple.com{href}"
-                        if href.startswith("/")
-                        else href
-                    )
+                logger.info(f"网页搜索提取到 {len(app_ids)} 个 App ID")
 
-                    # 构建结果（模拟 iTunes API 格式）
+                if not app_ids:
+                    return {
+                        "results": [],
+                        "query": query,
+                        "country": country,
+                        "platform": platform,
+                        "source": "web_search",
+                    }
+
+            # 批量调用 iTunes Lookup API 补齐元数据
+            lookup_data = await _itunes_lookup(app_ids, country)
+            logger.info(f"iTunes Lookup 返回 {len(lookup_data)} 个结果")
+
+            results = []
+            for app_id in app_ids:
+                meta = lookup_data.get(app_id)
+                if meta:
+                    # Lookup API 返回了完整元数据
                     results.append(
                         {
-                            "trackId": int(app_id),
-                            "trackName": app_name,
+                            "trackId": app_id,
+                            "trackName": meta.get("trackName", ""),
+                            "kind": meta.get("kind", "software"),
+                            "artistName": meta.get("artistName", ""),
+                            "artworkUrl100": meta.get("artworkUrl100", ""),
+                            "trackViewUrl": meta.get("trackViewUrl", ""),
+                            "formattedPrice": meta.get("formattedPrice", ""),
+                            "source": "web_search+lookup",
+                        }
+                    )
+                else:
+                    # Lookup 未返回，用 App ID 构建基本信息
+                    results.append(
+                        {
+                            "trackId": app_id,
+                            "trackName": f"App {app_id}",
                             "kind": "software",
-                            "artistName": "",  # 网页搜索无法直接获取开发者
-                            "trackViewUrl": full_url,
-                            "source": "web_search",  # 标记数据来源
+                            "artistName": "",
+                            "artworkUrl100": "",
+                            "trackViewUrl": f"https://apps.apple.com/{country}/app/id{app_id}",
+                            "source": "web_search",
                         }
                     )
 
-                    # 达到限制数量就停止
-                    if len(results) >= limit:
-                        break
+            logger.info(f"网页搜索完成: {len(results)} 个应用（其中 {len(lookup_data)} 个有完整元数据）")
 
-                logger.info(f"网页搜索完成: 找到 {len(results)} 个应用")
-
-                return {
-                    "results": results,
-                    "query": query,
-                    "country": country,
-                    "platform": platform,
-                    "source": "web_search",
-                }
+            return {
+                "results": results,
+                "query": query,
+                "country": country,
+                "platform": platform,
+                "source": "web_search",
+            }
 
         except Exception as e:
-            logger.error(f"网页搜索失败: {e}")
+            logger.error(f"网页搜索失败: {type(e).__name__}: {e}")
             return {
                 "results": [],
                 "query": query,

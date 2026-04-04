@@ -1,7 +1,8 @@
 """
-Pyrogram Redis 存储适配器
+Pyrofork Redis 存储适配器
 
-使用 Redis 存储 Pyrogram 会话数据，避免文件系统依赖。
+使用 Redis 存储 Pyrofork 会话数据，避免文件系统依赖。
+Pyrofork 保持了与 Pyrogram 相同的包名和 API 接口。
 """
 
 import base64
@@ -11,6 +12,8 @@ from typing import List
 from pyrogram import raw, utils
 from pyrogram.storage import Storage
 from redis.asyncio import Redis
+
+from utils.encryption import encrypt_credential, decrypt_credential
 
 logger = logging.getLogger(__name__)
 
@@ -28,20 +31,14 @@ def get_input_peer(peer_id: int, access_hash: int, peer_type: str):
         InputPeerUser, InputPeerChat 或 InputPeerChannel 对象
     """
     if peer_type in ["user", "bot"]:
-        return raw.types.InputPeerUser(
-            user_id=peer_id,
-            access_hash=access_hash
-        )
+        return raw.types.InputPeerUser(user_id=peer_id, access_hash=access_hash)
 
     if peer_type == "group":
-        return raw.types.InputPeerChat(
-            chat_id=-peer_id
-        )
+        return raw.types.InputPeerChat(chat_id=-peer_id)
 
     if peer_type in ["channel", "supergroup"]:
         return raw.types.InputPeerChannel(
-            channel_id=utils.get_channel_id(peer_id),
-            access_hash=access_hash
+            channel_id=utils.get_channel_id(peer_id), access_hash=access_hash
         )
 
     raise ValueError(f"Invalid peer type: {peer_type}")
@@ -272,7 +269,9 @@ class RedisStorage(Storage):
 
         peer_data = await self.redis_client.hget(self._key("peers"), str(peer_id))
         if not peer_data:
-            logger.debug(f"[RedisStorage] Peer {peer_id} 不在缓存中,Pyrogram 将通过 API 查询")
+            logger.debug(
+                f"[RedisStorage] Peer {peer_id} 不在缓存中,Pyrogram 将通过 API 查询"
+            )
             raise KeyError(f"Peer {peer_id} not found in cache")
 
         # 解析数据（处理 bytes 和 str 两种情况）
@@ -285,7 +284,9 @@ class RedisStorage(Storage):
         access_hash = int(parts[0])
         peer_type = parts[1] if len(parts) > 1 else "user"
 
-        logger.debug(f"[RedisStorage] 构造 InputPeer: peer_id={peer_id}, access_hash={access_hash}, type={peer_type}")
+        logger.debug(
+            f"[RedisStorage] 构造 InputPeer: peer_id={peer_id}, access_hash={access_hash}, type={peer_type}"
+        )
 
         # 返回 InputPeer 对象(使用辅助函数)
         return get_input_peer(peer_id, access_hash, peer_type)
@@ -375,16 +376,19 @@ class RedisStorage(Storage):
     # ==================== API Hash ====================
 
     async def api_hash(self, value: str = object):
-        """获取或设置 API Hash"""
+        """获取或设置 API Hash（加密存储）"""
         if value is object:
-            # 获取
+            # 获取并解密
             api_hash_data = self._decode_redis_value(
                 await self.redis_client.get(self._key("api_hash"))
             )
-            return api_hash_data if api_hash_data else None
+            if api_hash_data:
+                return decrypt_credential(api_hash_data)
+            return None
         else:
-            # 设置
+            # 设置（加密存储）
             if value is None:
                 await self.redis_client.delete(self._key("api_hash"))
             else:
-                await self.redis_client.set(self._key("api_hash"), value)
+                encrypted_value = encrypt_credential(value)
+                await self.redis_client.set(self._key("api_hash"), encrypted_value)

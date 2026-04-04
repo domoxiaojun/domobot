@@ -7,10 +7,9 @@
 import logging
 
 from telegram import Update
-from telegram.ext import ContextTypes, MessageHandler, filters
+from telegram.ext import ContextTypes, MessageHandler, filters, Application
 
 from utils.config_manager import get_config
-
 
 logger = logging.getLogger(__name__)
 
@@ -36,19 +35,24 @@ async def cache_user_info(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user = message.from_user
     chat_id = message.chat.id
 
-    logger.debug(f"[UserCache] 处理消息: 用户={user.id}(@{user.username}), 群组={chat_id}")
+    logger.debug(
+        f"[UserCache] 处理消息: 用户={user.id}(@{user.username}), 群组={chat_id}"
+    )
 
     # 修改：缓存所有用户，不仅仅是有用户名的用户
     try:
         await user_cache_manager.update_user_cache(
-            user_id=user.id, username=user.username, first_name=user.first_name, last_name=user.last_name
+            user_id=user.id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name,
         )
         # 日志记录已移至 user_cache_manager 内部，此处不再重复记录
     except Exception as e:
         logger.error(f"[UserCache] 缓存用户信息失败: {e}")
 
 
-def setup_user_cache_handler(application):
+def setup_user_cache_handler(application: "Application") -> None:
     """
     设置用户缓存处理器
     """
@@ -69,7 +73,10 @@ def setup_user_cache_handler(application):
 
     # 修改：处理所有类型的消息，不仅仅是文本消息
     # 同时支持超级群组和普通群组
-    handler = MessageHandler((filters.ChatType.SUPERGROUP | filters.ChatType.GROUP) & group_filter, cache_user_info)
+    handler = MessageHandler(
+        (filters.ChatType.SUPERGROUP | filters.ChatType.GROUP) & group_filter,
+        cache_user_info,
+    )
 
     # 添加到应用程序，使用较高的优先级（group=1）以确保先执行
     # group 数字越小，优先级越高

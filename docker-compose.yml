@@ -10,12 +10,17 @@ services:
       MYSQL_USER: ${DB_USER}
       MYSQL_PASSWORD: ${DB_PASSWORD}
     volumes:
-      - mysql_data:/var/lib/mysql
+      - ./data/mysql:/var/lib/mysql           # MySQL 数据持久化到本地
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
       - appbot-network
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   # Redis 服务
   redis:
@@ -24,42 +29,49 @@ services:
     restart: always
     command: redis-server --appendonly yes
     volumes:
-      - redis_data:/data
+      - ./data/redis:/data                    # Redis 数据持久化到本地
+    ports:
+      - "127.0.0.1:6379:6379"
     networks:
       - appbot-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
   
-  # 服务名称，可以自定义，这里我们叫它 appbot。
+#  # Telegram Bot 服务
   appbot:
+    # 使用 GitHub Actions 构建的镜像
+    #image: domomido/appbot:latest
+    # 本地开发时可以使用本地构建：
     build: .
 
     # --- 容器配置 ---
-    # 给容器一个固定的名字，方便管理。
     container_name: appbot
-    # 设置重启策略为 "always"，这样容器在意外退出时会自动重启。
     restart: always
-    
+
     # --- 环境变量 ---
-    # 从项目根目录下的 .env 文件中加载环境变量。
-    # 这是您要求的核心功能之一。
     env_file:
       - .env
     environment:
       - TZ=Asia/Shanghai
-      - REDIS_HOST=redis  # 使用服务名作为主机名
-      - DB_HOST=mysql     # 使用服务名作为主机名
-      
+      # 优先使用 .env 中的自定义主机；未配置时回退到 compose 服务名
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - DB_HOST=${DB_HOST:-mysql}
+
     # --- 端口映射 ---
-    # 将主机的 8443 端口映射到容器的 8443 端口。
-    # 格式是 "主机端口:容器端口"。
     ports:
       - "8443:8443"
-      
+
     # --- 卷（目录）映射 ---
-    # 将当前目录（.）挂载到容器内的 /app 目录。
-    # 这意味着您在本地对代码的任何修改，都会立即反映在运行的容器中，
-    # 无需重新构建镜像，极大地提高了开发效率。
+    # 生产环境：仅挂载持久化目录
     volumes:
-      - .:/app
+      - ./logs:/app/logs
+      - ./custom_scripts:/app/custom_scripts
+      # 开发调试：取消注释下行挂载代码目录（覆盖镜像代码，免重建）
+      # 注意：会使上面两条挂载变为冗余（.:/app 已包含它们）
+      # - .:/app
     
     # --- 网络配置 ---
     networks:
@@ -67,15 +79,73 @@ services:
     
     # --- 依赖配置 ---
     depends_on:
-      - mysql
-      - redis
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
-# 定义网络
+  # Web API 后端（独立镜像，复用 Bot 端 utils/commands 代码）
+  web-api:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    container_name: appbot-web-api
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Shanghai
+      # 优先使用 .env 中的自定义主机；未配置时回退到 compose 服务名
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - DB_HOST=${DB_HOST:-mysql}
+      - WEB_HOST=${WEB_HOST:-0.0.0.0}
+      - WEB_PORT=${WEB_PORT:-8000}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      # 热更新：取消注释以下四行，上传代码后 restart 即可生效，无需 --build
+      # - ./web:/app/web
+      # - ./utils:/app/utils
+      # - ./commands:/app/commands
+      # - ./handlers:/app/handlers
+    networks:
+      - appbot-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Web 前端（Next.js standalone）
+  # 注意：前端是编译型的，源码修改后必须 docker compose up -d --build web-frontend
+  # .env 变量修改除外（通过 entrypoint.sh 运行时注入，down+up 即可）
+  web-frontend:
+    build:
+      context: web/frontend
+      dockerfile: Dockerfile
+      args:
+        - API_URL=http://web-api:8000
+    container_name: appbot-web-frontend
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - API_URL=http://web-api:8000
+    ports:
+      - "8080:3000"
+    networks:
+      - appbot-network
+    depends_on:
+      - web-api
+
 networks:
   appbot-network:
     driver: bridge
 
-# 定义卷
-volumes:
-  mysql_data:
-  redis_data:
+# 注意：所有数据已映射到当前目录的 data/ 子目录下
+# MySQL 数据: ./data/mysql/
+# Redis 数据: ./data/redis/
+# 日志文件: ./logs/
+# 迁移时只需要打包这些目录和 .env 文件即可
