@@ -1,19 +1,31 @@
 # Python 虚拟环境
 .venv/
+venv/
 
 # Python 缓存文件
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Python 开发工具缓存
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # 环境变量文件 (包含敏感信息)
 .env
+.env.local
+.env.*.local
 
 # Pyrogram 会话文件 (包含敏感信息)
 sessions/
 *.session
 
-# IDE 配置文件 (PyCharm)
+# IDE 配置文件
 .idea/
+.vscode/
 
 # macOS 系统文件
 .DS_Store
@@ -21,11 +33,44 @@ sessions/
 # 日志文件
 *.log
 
+# 测试覆盖率
+htmlcov/
+.coverage
+
 # 注册样本数据 (用户隐私数据)
 database/registration_samples.json
 
+# 文档和配置 (个人工作文件)
+README.md
+CLAUDE.md
+
 # 文件目录
+docs/
 backup/
+.mcp.json
 .claude/
 data/
-logs/
+!data/streaming_plan_features.json
+
+# 临时演示/示例文件
+web_demo.html
+demo/
+example/
+
+# 备份文件
+*.bak
+logs/*.bak
+
+# 任务跟踪文件
+TODOS.md
+SHADCN_REGISTRIES.md
+
+# Web 前端
+node_modules/
+.next/
+dist/
+build/
+*.tsbuildinfo
+
+# Web 端 (整体目录, 按需取消注释)
+# web/
